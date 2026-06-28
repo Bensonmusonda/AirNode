@@ -41,9 +41,9 @@
         <li class="file-row"
             :class="(selectMode ? 'select-active' : '') + (selectedItems.includes('{{ safe_path }}') ? ' selected' : '')"
             @pointerdown="startLongPress($event, '{{ safe_path }}')"
-            @pointerup="cancelLongPress()"
-            @pointermove="cancelLongPress()"
-            @pointercancel="cancelLongPress()"
+            @pointerup="clearTimeout(_longPressTimer)"
+            @pointermove="cancelLongPress($event)"
+            @pointercancel="clearTimeout(_longPressTimer)"
             @contextmenu.prevent
             data-name="{{ entry.name }}"
             data-type="{{ entry.type }}"

@@ -67,6 +67,19 @@
                     document.addEventListener('touchmove', () => {
                         this.contextMenu = null;
                     }, { passive: true });
+
+                    // ── Cancel any pending long-press on scroll or HTMX navigation ──
+                    document.querySelector('.list-wrap')?.addEventListener('scroll', () => {
+                        clearTimeout(this._longPressTimer);
+                    }, { passive: true });
+
+                    document.addEventListener('htmx:beforeSwap', () => {
+                        clearTimeout(this._longPressTimer);
+                    });
+
+                    document.addEventListener('pointercancel', () => {
+                        clearTimeout(this._longPressTimer);
+                    });
                 },
 
                 updateCount() {
@@ -357,17 +370,25 @@
                 },
 
                 startLongPress(event, path) {
-                    // Don't interfere with normal taps on the row buttons
+                    if (event.target.closest('.row-menu-btn')) return;
+                    clearTimeout(this._longPressTimer); // cancel any previous orphaned timer
+                    this._lpStartX = event.clientX;
+                    this._lpStartY = event.clientY;
                     this._longPressTimer = setTimeout(() => {
-                        // Vibrate on mobile for tactile feedback
                         if (navigator.vibrate) navigator.vibrate(40);
                         this.selectMode = true;
                         this.selectedItems = [path];
                         this.contextMenu = null;
-                    }, 500);
+                    }, 600);
                 },
 
-                cancelLongPress() {
+                cancelLongPress(event) {
+                    if (event && this._lpStartX !== undefined) {
+                        const dx = Math.abs(event.clientX - this._lpStartX);
+                        const dy = Math.abs(event.clientY - this._lpStartY);
+                        // Only cancel if finger actually moved (swipe), not just jitter
+                        if (dx < 8 && dy < 8) return;
+                    }
                     clearTimeout(this._longPressTimer);
                 },
 
@@ -1090,12 +1111,16 @@
             }
         }
 
-        document.addEventListener('htmx:afterSwap', () => {
+        document.addEventListener('htmx:afterSwap', (event) => {
             if (window.lucide) lucide.createIcons();
             snapBreadcrumbs();
+            // Re-initialize Alpine on the swapped-in subtree so that
+            // directives on new rows (:class, @pointerdown etc.) are picked up
+            if (window.Alpine) Alpine.initTree(event.detail.target);
             window.__airnode?.sortFiles();
             window.__airnode?.applyFilters();
         });
+
         document.addEventListener('DOMContentLoaded', () => {
             if (window.lucide) lucide.createIcons();
             snapBreadcrumbs();
