@@ -90,22 +90,38 @@ button {
     flex-shrink: 0;
 }
 
-/* ── Path Bar ──────────────────────────────────────────────── */
+/* ── Header Path Bar Refinements ────────────────────────── */
 .path-bar {
-    flex: 1;
     display: flex;
+    justify-content: center;
     align-items: center;
-    gap: 2px;
+    flex-grow: 1;
+    margin: 0 16px;                 
+    min-width: 0;                   
     overflow: hidden;
-    min-width: 0;
 }
 
 .breadcrumbs {
     display: flex;
     align-items: center;
-    overflow: hidden;
+    gap: 4px;
     white-space: nowrap;
-    gap: 2px;
+    overflow-x: auto;
+    width: 100%;
+    justify-content: flex-start;
+    box-sizing: border-box;
+    padding-left: 16px;
+    padding-right: 24px; 
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.breadcrumbs::-webkit-scrollbar {
+    display: none;
+}
+
+.breadcrumbs > * {
+    flex-shrink: 0;
 }
 
 .crumb button {
