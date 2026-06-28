@@ -57,8 +57,8 @@ VIEWABLE_EXTENSIONS = {
 # ==============================================================================
 
 def is_path_allowed(target: Path) -> bool:
-    """Validates if the resolved target path lies within allowed root directories."""
-    target = target.resolve()
+    """Validates if the resolved target path lies within allowed root directories.
+    Expects an already-resolved Path — do not pass unresolved paths here."""
     return any(
         target == root or root in target.parents
         for root in ROOTS
@@ -90,31 +90,59 @@ def build_breadcrumbs(path_str: str) -> list[dict]:
     return crumbs
 
 def resolve_target(path: str) -> Path | None:
-    """Resolves raw path parameters into absolute, OS-specific path instances."""
+    """Resolves raw path parameters into absolute, OS-specific Path instances.
+    Always returns a resolved (canonicalised) path or None for the root sentinel."""
     if sys.platform == "win32":
         if not path:
             return None
         return Path(path.replace("/", "\\")).resolve()
     else:
-        if not path:
+        if not path or path == "/":
             return Path("/")
-        return (Path("/") / path).resolve()
+        # Strip leading slash before joining to avoid double-slash artefacts,
+        # then resolve to canonicalise symlinks and dot-segments.
+        return (Path("/") / path.lstrip("/")).resolve()
 
 def scan_directory(target: Path) -> list[dict]:
-    """Scans and retrieves detailed metadata for all file and directory entries inside a path."""
-    entries = []
-    for item in sorted(target.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
+    """Scans a directory and returns entry metadata.
+    Uses os.scandir so DirEntry.is_file() and DirEntry.stat() reuse the
+    cached inode data from the readdir syscall where the OS supports it
+    (Linux, macOS). The is_file() result is computed once per entry."""
+    try:
+        with os.scandir(target) as it:
+            scan_entries = list(it)
+    except OSError:
+        return []
+
+    # Evaluate is_file() once here; the lambda in the sort key reuses it.
+    typed: list[tuple[bool, os.DirEntry]] = []
+    for e in scan_entries:
         try:
-            size = item.stat().st_size if item.is_file() else None
-        except PermissionError:
-            size = None
-        ext = item.suffix.lstrip(".").lower() if item.is_file() else ""
+            typed.append((e.is_file(), e))
+        except OSError:
+            typed.append((False, e))
+
+    # Directories first, then files, both case-insensitive by name.
+    typed.sort(key=lambda t: (t[0], t[1].name.lower()))
+
+    entries = []
+    for is_file, entry in typed:
+        size = None
+        if is_file:
+            try:
+                size = entry.stat().st_size
+            except (PermissionError, OSError):
+                pass
+
+        name = entry.name
+        ext = name.rsplit(".", 1)[-1].lower() if ("." in name and is_file) else ""
+
         entries.append({
-            "name": item.name,
-            "type": "file" if item.is_file() else "directory",
+            "name": name,
+            "type": "file" if is_file else "directory",
             "size_bytes": size,
             "size_display": format_size(size),
-            "path": str(item).replace("\\", "/"),
+            "path": entry.path.replace("\\", "/"),
             "ext": ext,
             "viewable": ext in VIEWABLE_EXTENSIONS,
         })
@@ -130,7 +158,7 @@ def _render(request: Request, template: str, context: dict):
 # ==============================================================================
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
+async def index(request: Request):
     """Renders the main layout and root drive/directory listing."""
     if sys.platform == "win32":
         entries = [
@@ -140,7 +168,7 @@ def index(request: Request):
         current_path, breadcrumbs = "/", []
     else:
         target = Path("/")
-        entries = scan_directory(target)
+        entries = await run_in_threadpool(scan_directory, target)
         current_path, breadcrumbs = "/", []
 
     return _render(request, "index.html", {
@@ -154,8 +182,10 @@ def index(request: Request):
 # === HTMX Directory Browsing ===
 
 @app.get("/browse", response_class=HTMLResponse)
-def browse(request: Request, path: str = ""):
-    """Handles partial content rendering for HTMX and fallback full-page renders."""
+async def browse(request: Request, path: str = ""):
+    """Handles partial content rendering for HTMX and fallback full-page renders.
+    scan_directory is offloaded to a threadpool so blocking stat() calls never
+    stall the asyncio event loop."""
     target = resolve_target(path)
     is_htmx = "HX-Request" in request.headers
 
@@ -174,7 +204,7 @@ def browse(request: Request, path: str = ""):
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"Not a directory: {path!r}")
 
-    entries = scan_directory(target)
+    entries = await run_in_threadpool(scan_directory, target)
     current_path = str(target).replace("\\", "/")
     breadcrumbs = build_breadcrumbs(current_path)
     ctx = {"entries": entries, "current_path": current_path, "breadcrumbs": breadcrumbs, "platform": sys.platform}
@@ -208,14 +238,11 @@ def delete_item(request: Request, path: str):
     if not target.exists():
         raise HTTPException(status_code=404, detail="Item not found.")
         
+    item_type = "Folder" if target.is_dir() else "File"
     try:
         if target.is_dir():
             shutil.rmtree(target)
         else:
-            # Force explicit garbage collection close in case a preview iframe locked the file handle
-            import gc
-            gc.collect()
-            
             target.unlink()
             
         # Return a trigger header to tell HTMX to refresh the current directory view
@@ -224,7 +251,7 @@ def delete_item(request: Request, path: str):
             headers={
                 "HX-Trigger": json.dumps({
                     "refresh-directory": {},
-                    "show-toast": {"message": "File deleted successfully", "type": "success"}
+                    "show-toast": {"message": f"{item_type} deleted successfully", "type": "success"}
                 })
             }
         )
@@ -232,7 +259,7 @@ def delete_item(request: Request, path: str):
         # This will print out exactly why Windows rejected it in your terminal logs
         print(f"\n[AirNode Deletion Error]: {str(e)}")
         traceback.print_exc()
-        return Response(status_code=500, content=f"Failed to delete file: {str(e)}")
+        return Response(status_code=500, content=f"Failed to delete {item_type.lower()}: {str(e)}")
 
 @app.post("/upload", response_class=HTMLResponse)
 async def upload_file(
@@ -271,19 +298,16 @@ async def upload_file(
                 }
             )
 
-        # 3. Stream binary chunks to disk
-        def write_chunk(data_chunk, is_first_chunk):
-            mode = "wb" if is_first_chunk else "ab"
-            with open(destination, mode) as f:
-                f.write(data_chunk)
+        # 3. Stream binary chunks to disk — open once, write all chunks, close once.
+        async def stream_to_disk():
+            async with aiofiles.open(destination, "wb") as f:
+                while True:
+                    chunk = await file.read(1024 * 256)  # 256 KB chunks
+                    if not chunk:
+                        break
+                    await f.write(chunk)
 
-        is_first = True
-        while True:
-            chunk = await file.read(1024 * 64)
-            if not chunk:
-                break
-            await run_in_threadpool(write_chunk, chunk, is_first)
-            is_first = False
+        await stream_to_disk()
 
     except Exception as e:
         print("\n" + "="*60 + "\n[AirNode Upload Error Traceback]")
@@ -305,7 +329,7 @@ async def upload_file(
     )
 
 @app.get("/properties")
-def get_properties(path: str):
+async def get_properties(path: str):
     """Calculates granular system metrics and permissions for the properties dialog."""
     target = resolve_target(path)
     if target is None or not is_path_allowed(target):
@@ -328,6 +352,88 @@ def get_properties(path: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/rename")
+def rename_item(request: Request, path: str = Form(...), new_name: str = Form(...)):
+    """Renames a file or folder securely within allowed roots."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Item not found.")
+        
+    # Standardize the new name to remove any accidental path injection characters
+    clean_name = Path(new_name).name
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Invalid name.")
+        
+    destination = target.parent / clean_name
+    
+    # Safety Check: Prevent overwriting an existing file/folder
+    if destination.exists():
+        return Response(
+            status_code=400, 
+            content="An item with that name already exists."
+        )
+        
+    item_type = "Folder" if target.is_dir() else "File"
+    try:
+        os.rename(target, destination)
+        
+        # Return a 200 with headers to refresh the directory and fire a success toast
+        return Response(
+            status_code=200,
+            headers={
+                "HX-Trigger": json.dumps({
+                    "refresh-directory": {},
+                    "show-toast": {"message": f"{item_type} renamed successfully", "type": "success"}
+                })
+            }
+        )
+    except Exception as e:
+        print(f"\n[AirNode Rename Error]: {str(e)}")
+        return Response(status_code=500, content=f"Failed to rename {item_type.lower()}: {str(e)}")
+
+@app.post("/new-folder")
+def create_new_folder(request: Request, current_path: str = Form(...), folder_name: str = Form(...)):
+    """Creates a new subfolder inside the designated parent path securely."""
+    # Resolve and validate the target parent location
+    parent_dir = resolve_target(current_path)
+    if parent_dir is None or not is_path_allowed(parent_dir):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not parent_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Parent directory not found.")
+        
+    # Ensure the folder name does not contain illegal characters or path injections
+    clean_name = Path(folder_name).name
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Invalid folder name.")
+        
+    new_dir_path = parent_dir / clean_name
+    
+    # Check if a folder or file with that name already exists
+    if new_dir_path.exists():
+        return Response(
+            status_code=400, 
+            content="An item with that name already exists."
+        )
+        
+    try:
+        # Create the folder safely
+        new_dir_path.mkdir(exist_ok=False)
+        
+        return Response(
+            status_code=200,
+            headers={
+                "HX-Trigger": json.dumps({
+                    "refresh-directory": {},
+                    "show-toast": {"message": "Folder created successfully", "type": "success"}
+                })
+            }
+        )
+    except Exception as e:
+        print(f"\n[AirNode Folder Creation Error]: {str(e)}")
+        return Response(status_code=500, content=f"Failed to create folder: {str(e)}")
 # === Streaming File Viewer Endpoint (with HTTP Range request support) ===
 
 CHUNK = 1024 * 512  # 512 KB chunks
@@ -431,7 +537,7 @@ def view_file(request: Request, path: str):
 # === REST API Endpoints ===
 
 @app.get("/api/browse")
-def browse_json(path: str = ""):
+async def browse_json(path: str = ""):
     """Returns directory contents as structured JSON for API consumers."""
     target = resolve_target(path)
     if target is None:
@@ -440,4 +546,5 @@ def browse_json(path: str = ""):
         raise HTTPException(status_code=403, detail="Access denied.")
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=404, detail="Not found.")
-    return {"current_path": str(target).replace("\\", "/"), "entries": scan_directory(target)}
+    entries = await run_in_threadpool(scan_directory, target)
+    return {"current_path": str(target).replace("\\", "/"), "entries": entries}

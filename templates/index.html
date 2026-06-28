@@ -109,29 +109,7 @@
                 },
 
                 triggerUpload() {
-                    document.getElementById('hidden-upload-field').click();
-                },
-
-                handleFileUpload(event) {
-                    const file = event.target.files[0];
-                    if (!file) return;
-
-                    const formData = new FormData();
-                    formData.append('path', this.currentPath);
-                    formData.append('file', file);
-
-                    fetch('/upload', {
-                        method: 'POST',
-                        body: formData
-                    })
-                        .then(res => {
-                            if (res.ok) {
-                                document.body.dispatchEvent(new CustomEvent('refresh-directory'));
-                                this.menuOpen = false;
-                            } else {
-                                alert('Upload transaction rejected by host.');
-                            }
-                        });
+                    document.getElementById('file-upload-input').click();
                 },
 
                 openProperties(file) {
@@ -170,13 +148,12 @@
 </head>
 
 <body>
-    <input type="file" id="hidden-upload-field" style="display:none;" x-data
-        x-on:change="$data.handleFileUpload($event)" />
 
     <div class="layout" 
         x-data="airnode"
         x-on:refresh-directory.window="
-            htmx.ajax('GET', '/browse?path=' + encodeURIComponent(currentPath), { target: '#file-list-region', swap: 'innerHTML' })
+            htmx.ajax('GET', '/browse?path=' + encodeURIComponent(currentPath), { target: '#file-list-region', swap: 'innerHTML' });
+            $nextTick(() => updateCount());
         ">
 
         <header class="header">

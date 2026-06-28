@@ -20,7 +20,7 @@
 {% endif %}
 
 {# Directory and file entries listing #}
-<div hx-get="/browse?path={{ current_path | urlencode }}" hx-trigger="refresh-directory from:body"
+<div hx-get="/browse?path={{ current_path | urlencode }}" hx-trigger="refresh-directory from:window"
     hx-target="#file-list-region" hx-swap="innerHTML">
     {% if entries %}
     <ul class="file-list">
@@ -38,7 +38,7 @@
                 <span class="row-meta"></span>
             </button>
             <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
-            name: '{{ entry.name | replace("'", "\\'") }}',
+            name: '{{ entry.name | replace("\\", "\\\\") | replace("'", "\\'") }}',
             path: '{{ entry.path | replace("'", "\\'") }}',
             size: '—',
             ext: '',
@@ -52,7 +52,7 @@
             {% set is_viewable = 'true' if entry.viewable else 'false' %}
             <button class="row-btn" x-on:click="
             const file = {
-                name: '{{ entry.name | replace("'", "\\'") }}',
+                name: '{{ entry.name | replace("\\", "\\\\") | replace("'", "\\'") }}',
                 path: '{{ entry.path | replace("'", "\\'") }}',
                 size: '{{ entry.size_display }}',
                 ext:  '{{ entry.ext }}',
@@ -86,7 +86,7 @@
                 <span class="row-meta">{{ entry.size_display }}</span>
             </button>
             <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
-            name: '{{ entry.name | replace("'", "\\'") }}',
+            name: '{{ entry.name | replace("\\", "\\\\") | replace("'", "\\'") }}',
             path: '{{ entry.path | replace("'", "\\'") }}',
             size: '{{ entry.size_display }}',
             ext:  '{{ entry.ext }}',
