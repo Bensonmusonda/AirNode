@@ -310,6 +310,75 @@
             </div>
         </div>
 
+        <div class="modal-overlay" 
+             x-data="{ showRenameModal: false, renameTargetUrl: '', currentOldName: '', newName: '', renaming: false }"
+             x-show="showRenameModal" 
+             x-on:trigger-rename-modal.window="
+                 showRenameModal = true; 
+                 renameTargetUrl = event.detail.url;
+                 currentOldName = event.detail.name;
+                 newName = event.detail.name; /* Pre-fill the input with the old name */
+                 renaming = false;
+                 $nextTick(() => { $refs.renameInput.focus(); $refs.renameInput.select(); });
+             "
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" x-on:click.outside="if(!renaming) showRenameModal = false">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                    <i data-lucide="edit-2" style="stroke: var(--text-2); width:19px; height:19px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">Rename Item</h4>
+                </div>
+                
+                <div style="margin-top: 4px;">
+                    <input type="text" 
+                           x-model="newName" 
+                           x-ref="renameInput"
+                           x-bind:disabled="renaming"
+                           x-on:keydown.enter="if(newName.trim() && newName !== currentOldName) $refs.confirmRenameBtn.click()"
+                           style="width: 100%; padding: 10px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); font-size: 13px; box-sizing: border-box; outline: none;" />
+                </div>
+
+                <div class="modal-actions">
+                    <button class="modal-btn" x-bind:disabled="renaming" x-on:click="showRenameModal = false">Cancel</button>
+                    <button class="modal-btn primary" 
+                        x-ref="confirmRenameBtn"
+                        style="display: inline-flex; align-items: center; gap: 8px; min-width: 85px; justify-content: center;"
+                        x-bind:disabled="renaming || !newName.trim() || newName === currentOldName"
+                        x-on:click="
+                            renaming = true;
+                            contextMenu = null;
+                            
+                            // Go back to the native object structure HTMX expects
+                            htmx.ajax('POST', '/rename', { 
+                                values: { 
+                                    path: renameTargetUrl, 
+                                    new_name: newName.trim() 
+                                },
+                                headers: {
+                                    'Content-Type': 'application/x-www-form-urlencoded'
+                                },
+                                swap: 'none',
+                                handler: function(elt, info) {
+                                    renaming = false;
+                                    if (info.xhr.status === 200) {
+                                        showRenameModal = false;
+                                        // Forces the file matrix to reload on both desktop & mobile screens
+                                        window.dispatchEvent(new CustomEvent('refresh-directory'));
+                                    } else {
+                                        window.dispatchEvent(new CustomEvent('show-toast', { 
+                                            detail: { message: info.xhr.responseText || 'Failed to rename item.', type: 'error' } 
+                                        }));
+                                    }
+                                }
+                            });
+                        ">
+                    <div class="spinner" x-show="renaming" style="width: 12px; height: 12px; border-width: 2px; margin: 0; display: none;"></div>
+                    <span x-text="renaming ? 'Renaming...' : 'Save'"></span>
+                </button>
+                </div>
+            </div>
+        </div>
+
         <div class="floating-controls" 
             x-data="{ uploading: false }" 
             style="display: flex; flex-direction: column; align-items: flex-end; gap: 12px; position: fixed; bottom: 64px; right: 24px; z-index: 1000;">
@@ -482,6 +551,16 @@
                 <span class="ctx-icon"><i data-lucide="download" style="width:14px;height:14px;"></i></span>
                 Download
             </a>
+
+            <button class="ctx-item" x-on:click="
+                window.dispatchEvent(new CustomEvent('trigger-rename-modal', { 
+                    detail: { name: contextMenu.file.name, url: contextMenu.file.path } 
+                }));
+                contextMenu = null;
+            ">
+                <span class="ctx-icon"><i data-lucide="edit-2" style="width:14px;height:14px;"></i></span>
+                Rename
+            </button>
 
             <button class="ctx-item" x-on:click="openProperties(contextMenu.file)">
                 <span class="ctx-icon"><i data-lucide="info" style="width:14px;height:14px;"></i></span>

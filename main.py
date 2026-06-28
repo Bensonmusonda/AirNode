@@ -328,6 +328,46 @@ def get_properties(path: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/rename")
+def rename_item(request: Request, path: str = Form(...), new_name: str = Form(...)):
+    """Renames a file or folder securely within allowed roots."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Item not found.")
+        
+    # Standardize the new name to remove any accidental path injection characters
+    clean_name = Path(new_name).name
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Invalid name.")
+        
+    destination = target.parent / clean_name
+    
+    # Safety Check: Prevent overwriting an existing file/folder
+    if destination.exists():
+        return Response(
+            status_code=400, 
+            content="An item with that name already exists."
+        )
+        
+    try:
+        os.rename(target, destination)
+        
+        # Return a 200 with headers to refresh the directory and fire a success toast
+        return Response(
+            status_code=200,
+            headers={
+                "HX-Trigger": json.dumps({
+                    "refresh-directory": {},
+                    "show-toast": {"message": "Item renamed successfully", "type": "success"}
+                })
+            }
+        )
+    except Exception as e:
+        print(f"\n[AirNode Rename Error]: {str(e)}")
+        return Response(status_code=500, content=f"Rename failed: {str(e)}")
 # === Streaming File Viewer Endpoint (with HTTP Range request support) ===
 
 CHUNK = 1024 * 512  # 512 KB chunks
