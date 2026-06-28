@@ -237,16 +237,17 @@
         </div>
 
         <div class="modal-overlay" 
-            x-data="{ showDeleteModal: false, deleteTargetName: '', deleteTargetUrl: '' }"
-            x-show="showDeleteModal" 
-            x-on:trigger-delete-modal.window="
-                showDeleteModal = true; 
-                deleteTargetName = event.detail.name; 
-                deleteTargetUrl = event.detail.url;
-            "
-            style="display: none;"
-            x-transition>
-            <div class="modal-card" x-on:click.outside="showDeleteModal = false">
+             x-data="{ showDeleteModal: false, deleteTargetName: '', deleteTargetUrl: '', deleting: false }"
+             x-show="showDeleteModal" 
+             x-on:trigger-delete-modal.window="
+                 showDeleteModal = true; 
+                 deleteTargetName = event.detail.name; 
+                 deleteTargetUrl = event.detail.url;
+                 deleting = false;
+             "
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" x-on:click.outside="if(!deleting) showDeleteModal = false">
                 <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
                     <i data-lucide="trash-2" style="stroke: var(--text-2); width:19px; height:19px;"></i>
                     <h4 style="margin:0; font-size:15px; font-weight:600;">Delete File</h4>
@@ -255,14 +256,31 @@
                     Permanently drop tracking for <strong style="color: var(--text);" x-text="deleteTargetName"></strong>? This action is irreversible.
                 </p>
                 <div class="modal-actions">
-                    <button class="modal-btn" x-on:click="showDeleteModal = false">Cancel</button>
-                    <button class="modal-btn primary"
+                    <button class="modal-btn" x-bind:disabled="deleting" x-on:click="showDeleteModal = false">Cancel</button>
+                    <button class="modal-btn primary" 
+                            style="display: inline-flex; align-items: center; gap: 8px; min-width: 85px; justify-content: center;"
+                            x-bind:disabled="deleting"
                             x-on:click="
-                                showDeleteModal = false;
+                                deleting = true;
                                 contextMenu = null;
-                                htmx.ajax('DELETE', deleteTargetUrl, { swap: 'none' });
+                                
+                                htmx.ajax('POST', deleteTargetUrl, { 
+                                    swap: 'none',
+                                    handler: function(elt, info) {
+                                        deleting = false;
+                                        showDeleteModal = false;
+                                        if (info.xhr.status === 200) {
+                                            window.dispatchEvent(new CustomEvent('refresh-directory'));
+                                        } else {
+                                            window.dispatchEvent(new CustomEvent('show-toast', { 
+                                                detail: { message: 'Failed to complete filesystem item deletion.', type: 'error' } 
+                                            }));
+                                        }
+                                    }
+                                });
                             ">
-                        Confirm
+                        <div class="spinner" x-show="deleting" style="width: 12px; height: 12px; border-width: 2px; margin: 0; display: none;"></div>
+                        <span x-text="deleting ? 'Deleting...' : 'Confirm'"></span>
                     </button>
                 </div>
             </div>

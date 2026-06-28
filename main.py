@@ -8,7 +8,7 @@ import mimetypes
 import json
 import traceback
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
@@ -212,15 +212,27 @@ def delete_item(request: Request, path: str):
         if target.is_dir():
             shutil.rmtree(target)
         else:
+            # Force explicit garbage collection close in case a preview iframe locked the file handle
+            import gc
+            gc.collect()
+            
             target.unlink()
             
         # Return a trigger header to tell HTMX to refresh the current directory view
-        return HTMLResponse(
-            status_code=200, 
-            headers={"HX-Trigger": "refresh-directory"}
+        return Response(
+            status_code=200,
+            headers={
+                "HX-Trigger": json.dumps({
+                    "refresh-directory": {},
+                    "show-toast": {"message": "File deleted successfully", "type": "success"}
+                })
+            }
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+        # This will print out exactly why Windows rejected it in your terminal logs
+        print(f"\n[AirNode Deletion Error]: {str(e)}")
+        traceback.print_exc()
+        return Response(status_code=500, content=f"Failed to delete file: {str(e)}")
 
 @app.post("/upload", response_class=HTMLResponse)
 async def upload_file(
