@@ -1,9 +1,21 @@
 {# Navigation breadcrumbs rendered inside the header. #}
 
+{# Root crumb — always present, navigates back to the drive/partition picker #}
+<span class="crumb">
+    <button hx-get="/browse" hx-target="#file-list-region" hx-swap="innerHTML"
+        hx-push-url="/browse"
+        x-on:click="currentPath = '/'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = '');">
+        <i data-lucide="hard-drive" style="width:13px;height:13px;"></i>
+    </button>
+    {% if breadcrumbs %}<span class="crumb-sep">/</span>{% endif %}
+</span>
+
 {% for crumb in breadcrumbs %}
 {% if not loop.last %}
 <span class="crumb">
-    <button onclick="navigateTo('{{ crumb.path | replace("'", "\\'") }}')">{{ crumb.label }}</button>
+    <button hx-get="/browse?path={{ crumb.path | urlencode }}" hx-target="#file-list-region" hx-swap="innerHTML"
+        hx-push-url="/browse?path={{ crumb.path | urlencode }}"
+        x-on:click="currentPath = '{{ crumb.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = '');">{{ crumb.label }}</button>
     <span class="crumb-sep">/</span>
 </span>
 {% else %}

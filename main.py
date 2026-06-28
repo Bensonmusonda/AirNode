@@ -7,6 +7,8 @@ import ctypes
 import mimetypes
 import json
 import traceback
+import zipfile
+import io
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
@@ -86,7 +88,12 @@ def build_breadcrumbs(path_str: str) -> list[dict]:
     parts = [p for p in path_str.replace("\\", "/").split("/") if p]
     crumbs = []
     for i, part in enumerate(parts):
-        crumbs.append({"label": part, "path": "/".join(parts[:i + 1])})
+        path = "/".join(parts[:i + 1])
+        # Windows drive letters (e.g. "C:") need a trailing slash so
+        # resolve_target returns the drive root, not the current working directory.
+        if i == 0 and part.endswith(":"):
+            path += "/"
+        crumbs.append({"label": part, "path": path})
     return crumbs
 
 def resolve_target(path: str) -> Path | None:
@@ -128,11 +135,14 @@ def scan_directory(target: Path) -> list[dict]:
     entries = []
     for is_file, entry in typed:
         size = None
-        if is_file:
-            try:
-                size = entry.stat().st_size
-            except (PermissionError, OSError):
-                pass
+        mtime = 0.0
+        try:
+            stat_res = entry.stat()
+            mtime = stat_res.st_mtime
+            if is_file:
+                size = stat_res.st_size
+        except (PermissionError, OSError):
+            pass
 
         name = entry.name
         ext = name.rsplit(".", 1)[-1].lower() if ("." in name and is_file) else ""
@@ -145,6 +155,7 @@ def scan_directory(target: Path) -> list[dict]:
             "path": entry.path.replace("\\", "/"),
             "ext": ext,
             "viewable": ext in VIEWABLE_EXTENSIONS,
+            "mtime": mtime,
         })
     return entries
 
@@ -162,7 +173,7 @@ async def index(request: Request):
     """Renders the main layout and root drive/directory listing."""
     if sys.platform == "win32":
         entries = [
-            {"name": str(r), "type": "directory", "size_display": "", "path": str(r).replace("\\", "/"), "ext": "", "viewable": False}
+            {"name": str(r), "type": "directory", "size_display": "", "path": str(r).replace("\\", "/"), "ext": "", "viewable": False, "mtime": 0.0}
             for r in ROOTS
         ]
         current_path, breadcrumbs = "/", []
@@ -191,7 +202,7 @@ async def browse(request: Request, path: str = ""):
 
     if target is None:
         entries = [
-            {"name": str(r), "type": "directory", "size_display": "", "path": str(r).replace("\\", "/"), "ext": "", "viewable": False}
+            {"name": str(r), "type": "directory", "size_display": "", "path": str(r).replace("\\", "/"), "ext": "", "viewable": False, "mtime": 0.0}
             for r in ROOTS
         ]
         ctx = {"entries": entries, "current_path": "/", "breadcrumbs": [], "platform": sys.platform}
@@ -230,7 +241,7 @@ def download(path: str):
     )
 
 @app.post("/delete")
-def delete_item(request: Request, path: str):
+def delete_item(request: Request, path: str = Form(...)):
     """Deletes a file or directory securely if it passes validation."""
     target = resolve_target(path)
     if target is None or not is_path_allowed(target):
@@ -260,6 +271,60 @@ def delete_item(request: Request, path: str):
         print(f"\n[AirNode Deletion Error]: {str(e)}")
         traceback.print_exc()
         return Response(status_code=500, content=f"Failed to delete {item_type.lower()}: {str(e)}")
+
+# --- Batch Delete Endpoint ---
+@app.post("/delete-batch")
+async def delete_batch(paths: str = Form(...)):
+    """Deletes multiple files/folders."""
+    try:
+        path_list = json.loads(paths)
+        for p in path_list:
+            target = resolve_target(p)
+            # Ensure path is valid and within roots
+            if target and is_path_allowed(target) and target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+        return Response(
+            status_code=200,
+            headers={
+                "HX-Trigger": json.dumps({
+                    "show-toast": {"message": "Items deleted successfully", "type": "success"}
+                })
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Batch Download Endpoint ---
+@app.get("/download-batch")
+async def download_batch(paths: str):
+    try:
+        path_list = json.loads(paths)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid paths parameter.")
+    
+    # In-memory ZIP buffer
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for p in path_list:
+            target = resolve_target(p)
+            if target and is_path_allowed(target) and target.exists():
+                if target.is_dir():
+                    for root, _, files in os.walk(target):
+                        for file in files:
+                            file_path = Path(root) / file
+                            zip_file.write(file_path, file_path.relative_to(target.parent))
+                else:
+                    zip_file.write(target, target.name)
+    
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="archive.zip"'}
+    )
 
 @app.post("/upload", response_class=HTMLResponse)
 async def upload_file(

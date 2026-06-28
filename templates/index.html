@@ -27,86 +27,31 @@
                 sheet: null,
                 viewer: null,
                 searchOpen: false,
-                settingsOpen: null, 
+                settingsOpen: null, // Track dropdown state coordinates or null
                 darkMode: localStorage.getItem('darkMode') === 'true',
                 contextMenu: null,
-                menuOpen: false, 
-                propertiesData: null, 
 
-                get itemCount() {
-                    return this.folderCount + this.fileCount;
-                },
+                menuOpen: false, 
+                propertiesData: null,
+                renameModal: null,
+                renameName: '',
+                newFolderModal: false,
+                newFolderName: '',
+                sortBy: localStorage.getItem('sortBy') || 'name-asc',
+                dropdownPage: 'main',
+                filterModal: false,
+                filterTab: 'type',
+                filterType: 'all',
+                filterDate: 'all',
+                filterSize: 'all',
+                selectMode: false,
+                selectedItems: [],
 
                 init() {
+                    window.__airnode = this;
                     this.currentPath = document.getElementById('init-path').dataset.path;
                     this.updateCount();
-
-                    // Central navigation function. All directory opens, breadcrumb clicks,
-                    // and post-mutation refreshes go through here. Never call htmx.trigger
-                    // or manipulate hx-* attributes directly — this is the single source of truth.
-                    window.navigateTo = (path, pushState = true) => {
-                        const region = document.getElementById('file-list-region');
-                        if (!region) return;
-
-                        const url = '/browse?path=' + encodeURIComponent(path);
-
-                        fetch(url, { headers: { 'HX-Request': 'true' } })
-                            .then(r => {
-                                if (!r.ok) throw new Error('HTTP ' + r.status);
-                                return r.text();
-                            })
-                            .then(html => {
-                                // Parse the response so we can handle the OOB breadcrumb swap
-                                // separately from the main file-list content.
-                                const doc = new DOMParser().parseFromString(html, 'text/html');
-
-                                // Handle OOB breadcrumb update if present
-                                const oob = doc.querySelector('[hx-swap-oob]');
-                                if (oob) {
-                                    const targetSel = oob.getAttribute('hx-swap-oob').replace('innerHTML:', '');
-                                    const target = document.querySelector(targetSel);
-                                    if (target) {
-                                        target.innerHTML = oob.innerHTML;
-                                        htmx.process(target);
-                                    }
-                                    oob.remove();
-                                }
-
-                                // Swap the main file list
-                                region.innerHTML = doc.body.innerHTML;
-                                htmx.process(region);
-
-                                // Sync Alpine state
-                                const container = document.getElementById('file-list-container');
-                                if (container) this.currentPath = container.dataset.currentPath;
-                                this.query = '';
-                                this.updateCount();
-
-                                // Re-init icons for newly rendered content
-                                if (window.lucide) lucide.createIcons();
-
-                                // Push browser history
-                                if (pushState) {
-                                    history.pushState({ path }, '', url);
-                                }
-                            })
-                            .catch(err => {
-                                console.error('[AirNode] Navigation failed:', err);
-                            });
-                    };
-
-                    // Handle browser back/forward
-                    window.addEventListener('popstate', (e) => {
-                        const path = e.state?.path ?? '/';
-                        window.navigateTo(path, false);
-                    });
-
-                    // Single stable refresh-directory listener — reads live path, never stacks
-                    window.addEventListener('refresh-directory', () => {
-                        const container = document.getElementById('file-list-container');
-                        const path = container ? container.dataset.currentPath : (this.currentPath || '/');
-                        window.navigateTo(path, false);
-                    });
+                    this.$nextTick(() => this.sortFiles());
 
                     if (this.darkMode) {
                         document.documentElement.classList.add('dark');
@@ -114,26 +59,34 @@
                         document.documentElement.classList.remove('dark');
                     }
 
-
                     document.addEventListener('click', () => {
                         this.contextMenu = null;
                         this.settingsOpen = null;
+                        this.dropdownPage = 'main';
+                    });
+                    document.addEventListener('touchmove', () => {
+                        this.contextMenu = null;
+                    }, { passive: true });
+
+                    // ── Cancel any pending long-press on scroll or HTMX navigation ──
+                    document.querySelector('.list-wrap')?.addEventListener('scroll', () => {
+                        clearTimeout(this._longPressTimer);
+                    }, { passive: true });
+
+                    document.addEventListener('htmx:beforeSwap', () => {
+                        clearTimeout(this._longPressTimer);
                     });
 
-                    window.addEventListener('scroll', () => {
-                        this.contextMenu = null;
-                        this.settingsOpen = null;
-                    }, { passive: true });
-
-                    window.addEventListener('touchmove', () => {
-                        this.contextMenu = null;
-                        this.settingsOpen = null;
-                    }, { passive: true });
+                    document.addEventListener('pointercancel', () => {
+                        clearTimeout(this._longPressTimer);
+                    });
                 },
 
                 updateCount() {
-                    this.folderCount = document.querySelectorAll('.file-row[data-type="directory"]:not([style*="display: none"])').length;
-                    this.fileCount = document.querySelectorAll('.file-row[data-type="file"]:not([style*="display: none"])').length;
+                    const visibleRows = Array.from(document.querySelectorAll('.file-row:not([style*="display: none"])'));
+                    
+                    this.folderCount = visibleRows.filter(row => row.querySelector('[data-lucide="folder"]')).length;
+                    this.fileCount = visibleRows.filter(row => !row.querySelector('[data-lucide="folder"]')).length;
                 },
 
                 openModal(file) {
@@ -182,35 +135,81 @@
                         });
                     } else {
                         this.query = '';
-                        document.querySelectorAll('.file-row').forEach(r => r.style.display = '');
-                        this.updateCount();
+                        this.applyFilters();
                     }
                 },
 
-                triggerUpload() {
-                    document.getElementById('hidden-upload-field').click();
+                applyFilters() {
+                    const q = this.query.trim().toLowerCase();
+                    const type = this.filterType;
+                    const date = this.filterDate;
+                    const size = this.filterSize;
+                    const now = Date.now() / 1000;
+                    const oneDay = 24 * 60 * 60;
+                    const oneWeek = 7 * oneDay;
+                    const oneMonth = 30 * oneDay;
+
+                    document.querySelectorAll('.file-row').forEach(row => {
+                        const name = (row.dataset.name || '').toLowerCase();
+                        const rowType = row.dataset.type || '';
+                        const rowSize = parseInt(row.dataset.size || '0');
+                        const rowMtime = parseFloat(row.dataset.mtime || '0');
+                        const ext = (row.dataset.ext || '').toLowerCase();
+
+                        let show = name.includes(q);
+
+                        if (show && type !== 'all') {
+                            if (type === 'directory') show = rowType === 'directory';
+                            else if (type === 'file') show = rowType === 'file';
+                            else if (type === 'image') show = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
+                            else if (type === 'video') show = ['mp4', 'webm', 'mov'].includes(ext);
+                            else if (type === 'audio') show = ['mp3', 'ogg', 'wav', 'm4a', 'aac', 'flac'].includes(ext);
+                            else if (type === 'pdf') show = ext === 'pdf';
+                            else if (type === 'text') show = ['txt', 'md', 'py', 'js', 'ts', 'json', 'html', 'css', 'rs', 'c', 'cpp', 'go', 'java', 'sh'].includes(ext);
+                        }
+
+                        if (show && date !== 'all' && rowMtime > 0) {
+                            const age = now - rowMtime;
+                            if (date === 'today') show = age <= oneDay;
+                            else if (date === 'week') show = age <= oneWeek;
+                            else if (date === 'month') show = age <= oneMonth;
+                        }
+
+                        if (show && size !== 'all') {
+                            if (rowType === 'directory') {
+                                show = false;
+                            } else {
+                                if (size === 'small') show = rowSize < 10 * 1024 * 1024;
+                                else if (size === 'medium') show = rowSize >= 10 * 1024 * 1024 && rowSize <= 100 * 1024 * 1024;
+                                else if (size === 'large') show = rowSize > 100 * 1024 * 1024;
+                            }
+                        }
+
+                        row.style.display = show ? '' : 'none';
+                    });
+                    this.updateCount();
                 },
 
-                handleFileUpload(event) {
-                    const file = event.target.files[0];
-                    if (!file) return;
+                resetFilters() {
+                    this.filterType = 'all';
+                    this.filterDate = 'all';
+                    this.filterSize = 'all';
+                    this.applyFilters();
+                    if (window.lucide) {
+                        this.$nextTick(() => lucide.createIcons());
+                    }
+                },
 
-                    const formData = new FormData();
-                    formData.append('path', this.currentPath);
-                    formData.append('file', file);
+                activeFilterCount() {
+                    let count = 0;
+                    if (this.filterType !== 'all') count++;
+                    if (this.filterDate !== 'all') count++;
+                    if (this.filterSize !== 'all') count++;
+                    return count;
+                },
 
-                    fetch('/upload', {
-                        method: 'POST',
-                        body: formData
-                    })
-                        .then(res => {
-                            if (res.ok) {
-                                window.dispatchEvent(new CustomEvent('refresh-directory'));
-                                this.menuOpen = false;
-                            } else {
-                                alert('Upload transaction rejected by host.');
-                            }
-                        });
+                triggerUpload() {
+                    document.getElementById('file-upload-input').click();
                 },
 
                 openProperties(file) {
@@ -232,6 +231,38 @@
                     }));
                 },
 
+                toggleSelectMode() {
+                    this.selectMode = !this.selectMode;
+                    this.selectedItems = [];
+                    this.settingsOpen = null;
+                },
+
+                downloadSelected() {
+                    if (this.selectedItems.length === 0) return;
+                    const pathsStr = JSON.stringify(this.selectedItems);
+                    window.location.href = `/download-batch?paths=${encodeURIComponent(pathsStr)}`;
+                },
+
+                deleteSelected() {
+                    if (this.selectedItems.length === 0) return;
+                    if (!confirm(`Are you sure you want to delete the ${this.selectedItems.length} selected items?`)) return;
+                    
+                    const fd = new FormData();
+                    fd.append('paths', JSON.stringify(this.selectedItems));
+                    
+                    fetch('/delete-batch', { method: 'POST', body: fd })
+                        .then(async r => {
+                            if (r.ok) {
+                                this.selectedItems = [];
+                                this.selectMode = false;
+                                window.dispatchEvent(new CustomEvent('refresh-directory'));
+                            } else {
+                                const msg = await r.text();
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Failed to delete items', type: 'error' } }));
+                            }
+                        });
+                },
+
                 toggleDarkMode() {
                     this.darkMode = !this.darkMode;
                     localStorage.setItem('darkMode', this.darkMode);
@@ -240,6 +271,145 @@
                     } else {
                         document.documentElement.classList.remove('dark');
                     }
+                },
+
+                openRename(file) {
+                    this.renameName = file.name;
+                    this.renameModal = { ...file };
+                    this.contextMenu = null;
+                    this.sheet = null;
+                    this.$nextTick(() => {
+                        const el = document.getElementById('rename-input');
+                        if (el) { el.focus(); el.select(); }
+                    });
+                },
+
+                submitRename() {
+                    const trimmed = this.renameName.trim();
+                    if (!trimmed || !this.renameModal) return;
+                    const fd = new FormData();
+                    fd.append('path', this.renameModal.path);
+                    fd.append('new_name', trimmed);
+                    fetch('/rename', { method: 'POST', body: fd })
+                        .then(async r => {
+                            if (r.ok) {
+                                window.dispatchEvent(new CustomEvent('refresh-directory'));
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Renamed successfully', type: 'success' } }));
+                            } else {
+                                const msg = await r.text();
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Rename failed', type: 'error' } }));
+                            }
+                            this.renameModal = null;
+                        });
+                },
+
+                openNewFolder() {
+                    this.newFolderName = '';
+                    this.newFolderModal = true;
+                    this.contextMenu = null;
+                    this.$nextTick(() => document.getElementById('new-folder-input')?.focus());
+                },
+
+                submitNewFolder() {
+                    const trimmed = this.newFolderName.trim();
+                    if (!trimmed) return;
+                    const fd = new FormData();
+                    fd.append('current_path', this.currentPath);
+                    fd.append('folder_name', trimmed);
+                    fetch('/new-folder', { method: 'POST', body: fd })
+                        .then(async r => {
+                            if (r.ok) {
+                                window.dispatchEvent(new CustomEvent('refresh-directory'));
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Folder created successfully', type: 'success' } }));
+                            } else {
+                                const msg = await r.text();
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Failed to create folder', type: 'error' } }));
+                            }
+                            this.newFolderModal = false;
+                        });
+                },
+
+                sortFiles() {
+                    const list = document.querySelector('.file-list');
+                    if (!list) return;
+                    const items = Array.from(list.querySelectorAll('li.file-row'));
+                    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+                    items.sort((a, b) => {
+                        const typeA = a.dataset.type, typeB = b.dataset.type;
+                        // Directories always before files
+                        if (typeA !== typeB) return typeA === 'directory' ? -1 : 1;
+                        const nameA = a.dataset.name || '', nameB = b.dataset.name || '';
+                        switch (this.sortBy) {
+                            case 'name-desc': return collator.compare(nameB, nameA);
+                            case 'size-asc':  return parseInt(a.dataset.size || '0') - parseInt(b.dataset.size || '0');
+                            case 'size-desc': return parseInt(b.dataset.size || '0') - parseInt(a.dataset.size || '0');
+                            case 'date-desc': return parseFloat(b.dataset.mtime || '0') - parseFloat(a.dataset.mtime || '0');
+                            case 'date-asc':  return parseFloat(a.dataset.mtime || '0') - parseFloat(b.dataset.mtime || '0');
+                            case 'type-asc': {
+                                const extA = a.dataset.ext || '', extB = b.dataset.ext || '';
+                                if (extA !== extB) return collator.compare(extA, extB);
+                                return collator.compare(nameA, nameB);
+                            }
+                            case 'type-desc': {
+                                const extA = a.dataset.ext || '', extB = b.dataset.ext || '';
+                                if (extA !== extB) return collator.compare(extB, extA);
+                                return collator.compare(nameB, nameA);
+                            }
+                            default:          return collator.compare(nameA, nameB); // name-asc
+                        }
+                    });
+                    items.forEach(el => list.appendChild(el));
+                },
+
+                setSort(key) {
+                    this.sortBy = key;
+                    localStorage.setItem('sortBy', key);
+                    this.sortFiles();
+                    this.settingsOpen = null;
+                    this.dropdownPage = 'main';
+                },
+
+                startLongPress(event, path) {
+                    if (event.target.closest('.row-menu-btn')) return;
+                    clearTimeout(this._longPressTimer); // cancel any previous orphaned timer
+                    this._lpStartX = event.clientX;
+                    this._lpStartY = event.clientY;
+                    this._longPressTimer = setTimeout(() => {
+                        if (navigator.vibrate) navigator.vibrate(40);
+                        this.selectMode = true;
+                        this.selectedItems = [path];
+                        this.contextMenu = null;
+                    }, 600);
+                },
+
+                cancelLongPress(event) {
+                    if (event && this._lpStartX !== undefined) {
+                        const dx = Math.abs(event.clientX - this._lpStartX);
+                        const dy = Math.abs(event.clientY - this._lpStartY);
+                        // Only cancel if finger actually moved (swipe), not just jitter
+                        if (dx < 8 && dy < 8) return;
+                    }
+                    clearTimeout(this._longPressTimer);
+                },
+
+                toggleSelectItem(path) {
+                    if (this.selectedItems.includes(path)) {
+                        this.selectedItems = this.selectedItems.filter(p => p !== path);
+                        if (this.selectedItems.length === 0) this.selectMode = false;
+                    } else {
+                        this.selectedItems.push(path);
+                    }
+                },
+
+                enterSelectMode(path) {
+                    this.selectMode = true;
+                    this.selectedItems = [path];
+                    this.contextMenu = null;
+                },
+
+                exitSelectMode() {
+                    this.selectMode = false;
+                    this.selectedItems = [];
                 }
             }));
         });
@@ -249,18 +419,18 @@
 </head>
 
 <body>
-    <input type="file" id="hidden-upload-field" style="display:none;" x-data
-        x-on:change="$data.handleFileUpload($event)" />
 
     <div class="layout" 
-        x-data="airnode">
+        x-data="airnode"
+        x-on:refresh-directory.window="
+            htmx.ajax('GET', '/browse?path=' + encodeURIComponent(currentPath), { target: '#file-list-region', swap: 'innerHTML' });
+            $nextTick(() => updateCount());
+        ">
 
         <header class="header">
             <span class="wordmark">AirNode</span>
             <nav class="path-bar" id="path-bar">
-                <div class="breadcrumbs" 
-                    x-init="$nextTick(() => { $el.scrollLeft = ($el.scrollWidth - $el.clientWidth) - 60 })"
-                    x-on:wheel="$el.scrollLeft += $event.deltaY">
+                <div class="breadcrumbs">
                     {% include "partials/breadcrumbs.html" %}
                 </div>
             </nav>
@@ -274,110 +444,29 @@
         </header>
 
         <main class="list-wrap">
-            <div id="file-list-region">
+            <div id="file-list-region" hx-indicator="#loading">
                 {% include "partials/file_list.html" %}
             </div>
             <div id="loading" class="htmx-indicator">Loading…</div>
         </main>
 
-        <footer class="status-bar" style="display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 0 16px;">
-            <div style="display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;">
-                <span><span class="status-dot"></span></span>
-                <span style="font-size: 12px; font-weight: 500; letter-spacing: 0.05em;">LAN</span>
-            </div>
-
-            <div style="display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; font-weight: 500;">
+        <footer class="status-bar">
+            <span><span class="status-dot"></span></span>
+            <span>LAN</span>
+            <span style="display: inline-flex; align-items: center; gap: 6px;">
                 <span x-text="`${folderCount} folder${folderCount === 1 ? '' : 's'}`"></span>
-                <span style="color: var(--text-2); opacity: 0.4;">·</span>
+                <span style="color: var(--text-2); opacity: 0.6;">·</span>
                 <span x-text="`${fileCount} file${fileCount === 1 ? '' : 's'}`"></span>
-            </div>
+            </span>
         </footer>
-
-        <div class="modal-overlay" 
-             x-data="{ showNewFolderModal: false, targetDir: '', folderName: '', creating: false }"
-             x-show="showNewFolderModal" 
-             x-on:trigger-new-folder-modal.window="
-                 showNewFolderModal = true; 
-                 targetDir = event.detail.current_path;
-                 folderName = 'New Folder'; 
-                 creating = false;
-                 $nextTick(() => { $refs.folderInput.focus(); $refs.folderInput.select(); });
-             "
-             x-on:click.self="if(!creating) { showNewFolderModal = false; document.body.style.overflow = ''; }"
-             x-transition:enter="transition ease-out duration-150"
-             x-transition:enter-start="opacity-0"
-             x-transition:enter-end="opacity-100"
-             x-transition:leave="transition ease-in duration-100"
-             x-transition:leave-start="opacity-100"
-             x-transition:leave-end="opacity-0"
-             style="display: none;">
-            <div class="modal-card" x-on:click.stop x-on:click.outside="if(!creating) { showNewFolderModal = false; document.body.style.overflow = ''; }">
-                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
-                    <i data-lucide="folder-plus" x-init="$nextTick(() => { if(window.lucide) lucide.createIcons() })" style="stroke: var(--text-2); width:19px; height:19px;"></i>
-                    <h4 style="margin:0; font-size:15px; font-weight:600;">Create New Folder</h4>
-                </div>
-                
-                <div style="margin-top: 4px;">
-                    <input type="text" 
-                           x-model="folderName" 
-                           x-ref="folderInput"
-                           x-bind:disabled="creating"
-                           x-on:keydown.enter="if(folderName.trim()) $refs.confirmCreateBtn.click()"
-                           style="width: 100%; padding: 10px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); font-size: 13px; box-sizing: border-box; outline: none;" />
-                </div>
-
-                <div class="modal-actions">
-                    <button class="modal-btn" x-bind:disabled="creating" x-on:click="showNewFolderModal = false; document.body.style.overflow = '';">Cancel</button>
-                    <button class="modal-btn primary" 
-                            x-ref="confirmCreateBtn"
-                            style="display: inline-flex; align-items: center; gap: 8px; min-width: 85px; justify-content: center;"
-                            x-bind:disabled="creating || !folderName.trim()"
-                            x-on:click="
-                                creating = true;
-                                
-                                htmx.ajax('POST', '/new-folder', { 
-                                    values: { 
-                                        current_path: targetDir, 
-                                        folder_name: folderName.trim() 
-                                    },
-                                    headers: {
-                                        'Content-Type': 'application/x-www-form-urlencoded'
-                                    },
-                                    swap: 'none',
-                                    handler: function(elt, info) {
-                                        creating = false;
-                                        document.body.style.overflow = '';
-                                        if (info.xhr.status === 200) {
-                                            showNewFolderModal = false;
-                                            window.dispatchEvent(new CustomEvent('refresh-directory'));
-                                        } else {
-                                            window.dispatchEvent(new CustomEvent('show-toast', { 
-                                                detail: { message: info.xhr.responseText || 'Failed to create folder.', type: 'error' } 
-                                            }));
-                                        }
-                                    }
-                                });
-                            ">
-                        <div class="spinner" x-show="creating" style="width: 12px; height: 12px; border-width: 2px; margin: 0; display: none;"></div>
-                        <span x-text="creating ? 'Creating...' : 'Create'"></span>
-                    </button>
-                </div>
-            </div>
-        </div>
 
         <div class="modal-overlay" 
             x-data="{ showModal: false, collisionFilename: '' }"
             x-show="showModal" 
             x-on:file-collision-detected.window="showModal = true; collisionFilename = event.detail.filename;"
-            x-on:click.self="showModal = false; document.body.style.overflow = '';"
-            x-transition:enter="transition ease-out duration-150"
-            x-transition:enter-start="opacity-0"
-            x-transition:enter-end="opacity-100"
-            x-transition:leave="transition ease-in duration-100"
-            x-transition:leave-start="opacity-100"
-            x-transition:leave-end="opacity-0"
-            style="display: none;">
-            <div class="modal-card" x-on:click.stop x-on:click.outside="showModal = false; document.body.style.overflow = '';">
+            style="display: none;"
+            x-transition>
+            <div class="modal-card" x-on:click.outside="showModal = false">
                 <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
                     <i data-lucide="info" style="stroke: var(--text-2); width:20px; height:20px;"></i>
                     <h4 style="margin:0; font-size:15px; font-weight:600;">File Already Exists</h4>
@@ -386,11 +475,10 @@
                     A file named <strong style="color: var(--text);" x-text="collisionFilename"></strong> already exists in this folder. Overwrite it?
                 </p>
                 <div class="modal-actions">
-                    <button class="modal-btn" x-on:click="showModal = false; document.body.style.overflow = '';">Cancel</button>
+                    <button class="modal-btn" x-on:click="showModal = false">Cancel</button>
                     <button class="modal-btn primary"
                             x-on:click="
                                 showModal = false;
-                                document.body.style.overflow = '';
                                 contextMenu = null;
                                 document.getElementById('force-overwrite-input').value = 'true';
                                 htmx.trigger('#file-upload-form', 'submit');
@@ -410,15 +498,9 @@
                  deleteTargetUrl = event.detail.url;
                  deleting = false;
              "
-             x-on:click.self="if(!deleting) { showDeleteModal = false; document.body.style.overflow = ''; }"
-             x-transition:enter="transition ease-out duration-150"
-             x-transition:enter-start="opacity-0"
-             x-transition:enter-end="opacity-100"
-             x-transition:leave="transition ease-in duration-100"
-             x-transition:leave-start="opacity-100"
-             x-transition:leave-end="opacity-0"
-             style="display: none;">
-            <div class="modal-card" x-on:click.stop x-on:click.outside="if(!deleting) { showDeleteModal = false; document.body.style.overflow = ''; }">
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" x-on:click.outside="if(!deleting) showDeleteModal = false">
                 <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
                     <i data-lucide="trash-2" style="stroke: var(--text-2); width:19px; height:19px;"></i>
                     <h4 style="margin:0; font-size:15px; font-weight:600;">Delete File</h4>
@@ -427,7 +509,7 @@
                     Permanently drop tracking for <strong style="color: var(--text);" x-text="deleteTargetName"></strong>? This action is irreversible.
                 </p>
                 <div class="modal-actions">
-                    <button class="modal-btn" x-bind:disabled="deleting" x-on:click="showDeleteModal = false; document.body.style.overflow = '';">Cancel</button>
+                    <button class="modal-btn" x-bind:disabled="deleting" x-on:click="showDeleteModal = false">Cancel</button>
                     <button class="modal-btn primary" 
                             style="display: inline-flex; align-items: center; gap: 8px; min-width: 85px; justify-content: center;"
                             x-bind:disabled="deleting"
@@ -439,7 +521,6 @@
                                     swap: 'none',
                                     handler: function(elt, info) {
                                         deleting = false;
-                                        document.body.style.overflow = '';
                                         showDeleteModal = false;
                                         if (info.xhr.status === 200) {
                                             window.dispatchEvent(new CustomEvent('refresh-directory'));
@@ -458,76 +539,177 @@
             </div>
         </div>
 
-        <div class="modal-overlay" 
-             x-data="{ showRenameModal: false, renameTargetUrl: '', currentOldName: '', newName: '', renaming: false }"
-             x-show="showRenameModal"
-             x-on:trigger-rename-modal.window="
-                 showRenameModal = true; 
-                 renameTargetUrl = event.detail.url;
-                 currentOldName = event.detail.name;
-                 newName = event.detail.name;
-                 renaming = false;
-                 $nextTick(() => { $refs.renameInput.focus(); $refs.renameInput.select(); });
-             "
-             x-on:click.self="if(!renaming) { showRenameModal = false; document.body.style.overflow = ''; }"
-             x-transition:enter="transition ease-out duration-150"
-             x-transition:enter-start="opacity-0"
-             x-transition:enter-end="opacity-100"
-             x-transition:leave="transition ease-in duration-100"
-             x-transition:leave-start="opacity-100"
-             x-transition:leave-end="opacity-0"
-             style="display: none;">
-            <div class="modal-card" x-on:click.stop x-on:click.outside="if(!renaming) { showRenameModal = false; document.body.style.overflow = ''; }">
+        <!-- Rename Modal -->
+        <div class="modal-overlay"
+             x-show="renameModal !== null"
+             x-on:keydown.escape.window="renameModal = null"
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" x-on:click.outside="renameModal = null">
                 <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
-                    <i data-lucide="edit-2" style="stroke: var(--text-2); width:19px; height:19px;"></i>
-                    <h4 style="margin:0; font-size:15px; font-weight:600;">Rename Item</h4>
+                    <i data-lucide="pencil" style="stroke: var(--text-2); width:20px; height:20px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">Rename</h4>
                 </div>
-                
-                <div style="margin-top: 4px;">
-                    <input type="text" 
-                           x-model="newName" 
-                           x-ref="renameInput"
-                           x-bind:disabled="renaming"
-                           x-on:keydown.enter="if(newName.trim() && newName !== currentOldName) $refs.confirmRenameBtn.click()"
-                           style="width: 100%; padding: 10px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); font-size: 13px; box-sizing: border-box; outline: none;" />
+                <p style="font-size: 13px; color: var(--text-2); margin: 0; line-height: 1.5;">
+                    Enter a new name for <strong style="color: var(--text);" x-text="renameModal?.name"></strong>
+                </p>
+                <input id="rename-input"
+                    type="text"
+                    x-model="renameName"
+                    x-on:keydown.enter="submitRename()"
+                    x-on:keydown.escape="renameModal = null"
+                    style="width:100%; box-sizing:border-box; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:14px; outline:none;"
+                    placeholder="New name…" />
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="renameModal = null">Cancel</button>
+                    <button class="modal-btn primary" x-on:click="submitRename()">Rename</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- New Folder Modal -->
+        <div class="modal-overlay"
+             x-show="newFolderModal"
+             x-on:keydown.escape.window="newFolderModal = false"
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" x-on:click.outside="newFolderModal = false">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                    <i data-lucide="folder-plus" style="stroke: var(--text-2); width:20px; height:20px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">New Folder</h4>
+                </div>
+                <input id="new-folder-input"
+                    type="text"
+                    x-model="newFolderName"
+                    x-on:keydown.enter="submitNewFolder()"
+                    x-on:keydown.escape="newFolderModal = false"
+                    style="width:100%; box-sizing:border-box; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:14px; outline:none;"
+                    placeholder="Folder name…" />
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="newFolderModal = false">Cancel</button>
+                    <button class="modal-btn primary" x-on:click="submitNewFolder()">Create</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter Modal -->
+        <div class="modal-overlay"
+             x-show="filterModal"
+             x-on:keydown.escape.window="filterModal = false"
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" style="max-width: 440px;" x-on:click.outside="filterModal = false">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text); margin-bottom: 12px;">
+                    <i data-lucide="filter" style="stroke: var(--text-2); width:20px; height:20px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">Filter Options</h4>
                 </div>
 
-                <div class="modal-actions">
-                    <button class="modal-btn" x-bind:disabled="renaming" x-on:click="showRenameModal = false; document.body.style.overflow = '';">Cancel</button>
-                    <button class="modal-btn primary" 
-                        x-ref="confirmRenameBtn"
-                        style="display: inline-flex; align-items: center; gap: 8px; min-width: 85px; justify-content: center;"
-                        x-bind:disabled="renaming || !newName.trim() || newName === currentOldName"
-                        x-on:click="
-                            renaming = true;
-                            contextMenu = null;
-                            
-                            htmx.ajax('POST', '/rename', { 
-                                values: { 
-                                    path: renameTargetUrl, 
-                                    new_name: newName.trim() 
-                                },
-                                headers: {
-                                    'Content-Type': 'application/x-www-form-urlencoded'
-                                },
-                                swap: 'none',
-                                handler: function(elt, info) {
-                                    renaming = false;
-                                    document.body.style.overflow = '';
-                                    if (info.xhr.status === 200) {
-                                        showRenameModal = false;
-                                        window.dispatchEvent(new CustomEvent('refresh-directory'));
-                                    } else {
-                                        window.dispatchEvent(new CustomEvent('show-toast', { 
-                                            detail: { message: info.xhr.responseText || 'Failed to rename item.', type: 'error' } 
-                                        }));
-                                    }
-                                }
-                            });
-                        ">
-                    <div class="spinner" x-show="renaming" style="width: 12px; height: 12px; border-width: 2px; margin: 0; display: none;"></div>
-                    <span x-text="renaming ? 'Renaming...' : 'Save'"></span>
-                </button>
+                <!-- Tabs header -->
+                <div class="filter-tabs">
+                    <button class="filter-tab-btn" :class="{ 'active': filterTab === 'type' }" x-on:click="filterTab = 'type'">
+                        <span style="display:inline-flex; align-items:center; gap:6px;">
+                            <span class="filter-active-dot" x-show="filterType !== 'all'"></span>
+                            File Type
+                        </span>
+                    </button>
+                    <button class="filter-tab-btn" :class="{ 'active': filterTab === 'date' }" x-on:click="filterTab = 'date'">
+                        <span style="display:inline-flex; align-items:center; gap:6px;">
+                            <span class="filter-active-dot" x-show="filterDate !== 'all'"></span>
+                            Date Modified
+                        </span>
+                    </button>
+                    <button class="filter-tab-btn" :class="{ 'active': filterTab === 'size' }" x-on:click="filterTab = 'size'">
+                        <span style="display:inline-flex; align-items:center; gap:6px;">
+                            <span class="filter-active-dot" x-show="filterSize !== 'all'"></span>
+                            Size Range
+                        </span>
+                    </button>
+                </div>
+
+                <!-- Tab: Type -->
+                <div x-show="filterTab === 'type'" class="filter-options-group">
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'all' }" x-on:click="filterType = 'all'; applyFilters();">
+                        <span>All Types</span>
+                        <i data-lucide="check" x-show="filterType === 'all'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'directory' }" x-on:click="filterType = 'directory'; applyFilters();">
+                        <span>Folders Only</span>
+                        <i data-lucide="check" x-show="filterType === 'directory'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'file' }" x-on:click="filterType = 'file'; applyFilters();">
+                        <span>Files Only</span>
+                        <i data-lucide="check" x-show="filterType === 'file'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'image' }" x-on:click="filterType = 'image'; applyFilters();">
+                        <span>Images</span>
+                        <i data-lucide="check" x-show="filterType === 'image'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'video' }" x-on:click="filterType = 'video'; applyFilters();">
+                        <span>Videos</span>
+                        <i data-lucide="check" x-show="filterType === 'video'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'audio' }" x-on:click="filterType = 'audio'; applyFilters();">
+                        <span>Audio</span>
+                        <i data-lucide="check" x-show="filterType === 'audio'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'pdf' }" x-on:click="filterType = 'pdf'; applyFilters();">
+                        <span>PDF Documents</span>
+                        <i data-lucide="check" x-show="filterType === 'pdf'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'text' }" x-on:click="filterType = 'text'; applyFilters();">
+                        <span>Text & Code Files</span>
+                        <i data-lucide="check" x-show="filterType === 'text'" style="width:14px;height:14px;"></i>
+                    </button>
+                </div>
+
+                <!-- Tab: Date -->
+                <div x-show="filterTab === 'date'" class="filter-options-group">
+                    <button class="filter-option-item" :class="{ 'active': filterDate === 'all' }" x-on:click="filterDate = 'all'; applyFilters();">
+                        <span>Anytime</span>
+                        <i data-lucide="check" x-show="filterDate === 'all'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterDate === 'today' }" x-on:click="filterDate = 'today'; applyFilters();">
+                        <span>Past 24 Hours</span>
+                        <i data-lucide="check" x-show="filterDate === 'today'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterDate === 'week' }" x-on:click="filterDate = 'week'; applyFilters();">
+                        <span>Past Week</span>
+                        <i data-lucide="check" x-show="filterDate === 'week'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterDate === 'month' }" x-on:click="filterDate = 'month'; applyFilters();">
+                        <span>Past Month</span>
+                        <i data-lucide="check" x-show="filterDate === 'month'" style="width:14px;height:14px;"></i>
+                    </button>
+                </div>
+
+                <!-- Tab: Size -->
+                <div x-show="filterTab === 'size'" class="filter-options-group">
+                    <button class="filter-option-item" :class="{ 'active': filterSize === 'all' }" x-on:click="filterSize = 'all'; applyFilters();">
+                        <span>Any Size</span>
+                        <i data-lucide="check" x-show="filterSize === 'all'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterSize === 'small' }" x-on:click="filterSize = 'small'; applyFilters();">
+                        <span>Small (&lt; 10 MB)</span>
+                        <i data-lucide="check" x-show="filterSize === 'small'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterSize === 'medium' }" x-on:click="filterSize = 'medium'; applyFilters();">
+                        <span>Medium (10 MB - 100 MB)</span>
+                        <i data-lucide="check" x-show="filterSize === 'medium'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterSize === 'large' }" x-on:click="filterSize = 'large'; applyFilters();">
+                        <span>Large (&gt; 100 MB)</span>
+                        <i data-lucide="check" x-show="filterSize === 'large'" style="width:14px;height:14px;"></i>
+                    </button>
+                </div>
+
+                <div class="modal-actions" style="margin-top: 16px; align-items: center; justify-content: space-between;">
+                    <div style="font-size: 12px; color: var(--text-2);">
+                        <span x-text="activeFilterCount() === 0 ? 'No filters active' : `${activeFilterCount()} active filter${activeFilterCount() === 1 ? '' : 's'}`"></span>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="modal-btn" x-show="activeFilterCount() > 0" x-on:click="resetFilters()" style="color: var(--danger); border-color: var(--danger);">Reset</button>
+                        <button class="modal-btn primary" x-on:click="filterModal = false">Done</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -575,12 +757,7 @@
             <div class="search-container" :class="{ 'is-active': searchOpen }">
                 <input id="search-input" class="search-input-inline" type="text" placeholder="Filter files…"
                     autocomplete="off" autocorrect="off" spellcheck="false" x-model="query" x-show="searchOpen"
-                    x-on:input="
-                    document.querySelectorAll('.file-row').forEach(row => {
-                        row.style.display = row.dataset.name.toLowerCase().includes(query.toLowerCase()) ? '' : 'none';
-                    });
-                    updateCount();
-                    " x-on:keydown.escape="toggleSearch()" />
+                    x-on:input="applyFilters()" x-on:keydown.escape="toggleSearch()" />
 
                 <button class="search-trigger" x-on:click.stop="toggleSearch()" aria-label="Toggle search">
                     <span x-show="!searchOpen" style="display:flex;"><i data-lucide="search" style="width:18px;height:18px;"></i></span>
@@ -624,6 +801,11 @@
                                     style="width:16px;height:16px;"></i></span>
                             <span>Upload File Here</span>
                         </button>
+                        <button class="menu-item-btn" x-on:click="openNewFolder(); menuOpen = false;">
+                            <span class="menu-item-icon"><i data-lucide="folder-plus"
+                                    style="width:16px;height:16px;"></i></span>
+                            <span>New Folder</span>
+                        </button>
                         <button class="menu-item-btn" x-on:click="settingsOpen = true; menuOpen = false;">
                             <span class="menu-item-icon"><i data-lucide="settings"
                                     style="width:16px;height:16px;"></i></span>
@@ -634,34 +816,102 @@
             </div>
         </div>
 
-        <div class="dropdown-menu" x-show="settingsOpen !== null" x-on:click.outside="settingsOpen = null"
+        <div class="dropdown-menu" x-show="settingsOpen !== null" x-on:click.outside="settingsOpen = null; dropdownPage = 'main';"
             x-bind:style="settingsOpen ? `top: ${settingsOpen.y}px; left: ${settingsOpen.x}px;` : ''"
+            x-bind:class="dropdownPage === 'sort' ? 'dropdown-menu dark-submenu' : 'dropdown-menu'"
             style="display:none">
 
-            <button class="dropdown-item" x-on:click="toggleDarkMode()">
-                <span class="dropdown-icon">
-                    <i data-lucide="moon" x-show="!darkMode" style="width:14px;height:14px;"></i>
-                    <i data-lucide="sun" x-show="darkMode" style="width:14px;height:14px;"></i>
-                </span>
-                <span style="flex:1" x-text="darkMode ? 'Light Theme' : 'Dark Theme'"></span>
-            </button>
+            <!-- Main Page -->
+            <div x-show="dropdownPage === 'main'">
+                <button class="dropdown-item" x-on:click="openNewFolder(); settingsOpen = null;">
+                    <span class="dropdown-icon"><i data-lucide="folder-plus" style="width:14px;height:14px;"></i></span>
+                    <span>New Folder</span>
+                </button>
 
-            <button class="dropdown-item" x-on:click="
-                window.dispatchEvent(new CustomEvent('trigger-new-folder-modal', { 
-                    detail: { current_path: currentPath } 
-                }));
-                settingsOpen = null;
-            ">
-                <span class="dropdown-icon"><i data-lucide="folder-plus" x-init="$nextTick(() => { if(window.lucide) lucide.createIcons() })" style="width:14px;height:14px;"></i></span>
-                <span>New Folder</span>
-            </button>
+                <div class="dropdown-divider"></div>
 
-            <div class="dropdown-divider"></div>
+                <button class="dropdown-item" x-on:click.stop="dropdownPage = 'sort'; $nextTick(() => { if(window.lucide) lucide.createIcons(); });">
+                    <span class="dropdown-icon"><i data-lucide="arrow-up-down" style="width:14px;height:14px;"></i></span>
+                    <span>Sort By</span>
+                    <i data-lucide="chevron-right" style="width:14px;height:14px;margin-left:auto;opacity:0.6;"></i>
+                </button>
 
-            <button class="dropdown-item" x-on:click="settingsOpen = null">
-                <span class="dropdown-icon"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i></span>
-                <span>Refresh Index</span>
-            </button>
+                <div class="dropdown-divider"></div>
+
+                <button class="dropdown-item" x-on:click="filterModal = true; settingsOpen = null; filterTab = 'type'; $nextTick(() => { if(window.lucide) lucide.createIcons(); });">
+                    <span class="dropdown-icon"><i data-lucide="filter" style="width:14px;height:14px;"></i></span>
+                    <span>Filter Items</span>
+                    <span x-show="activeFilterCount() > 0" class="filter-active-dot" style="margin-left:auto; margin-right:0;"></span>
+                </button>
+
+                <div class="dropdown-divider"></div>
+
+                <button class="dropdown-item" x-on:click="toggleDarkMode()">
+                    <span class="dropdown-icon">
+                        <i data-lucide="moon" x-show="!darkMode" style="width:14px;height:14px;"></i>
+                        <i data-lucide="sun" x-show="darkMode" style="width:14px;height:14px;"></i>
+                    </span>
+                    <span style="flex:1" x-text="darkMode ? 'Light Theme' : 'Dark Theme'"></span>
+                </button>
+
+                <div class="dropdown-divider"></div>
+
+                <button class="dropdown-item" x-on:click="settingsOpen = null">
+                    <span class="dropdown-icon"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i></span>
+                    <span>Refresh Index</span>
+                </button>
+            </div>
+
+            <!-- Sort Page -->
+            <div x-show="dropdownPage === 'sort'">
+                <button class="dropdown-item" style="font-weight: 600;" x-on:click.stop="dropdownPage = 'main'; $nextTick(() => { if(window.lucide) lucide.createIcons(); });">
+                    <span class="dropdown-icon"><i data-lucide="chevron-left" style="width:14px;height:14px;"></i></span>
+                    <span>Back</span>
+                </button>
+
+                <div class="dropdown-divider"></div>
+
+                <button class="dropdown-item" x-on:click="setSort('name-asc')">
+                    <span class="dropdown-icon"><i data-lucide="arrow-up-a-z" style="width:14px;height:14px;"></i></span>
+                    <span>Name A → Z</span>
+                    <i data-lucide="check" x-show="sortBy === 'name-asc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('name-desc')">
+                    <span class="dropdown-icon"><i data-lucide="arrow-down-z-a" style="width:14px;height:14px;"></i></span>
+                    <span>Name Z → A</span>
+                    <i data-lucide="check" x-show="sortBy === 'name-desc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('size-asc')">
+                    <span class="dropdown-icon"><i data-lucide="arrow-up-narrow-wide" style="width:14px;height:14px;"></i></span>
+                    <span>Size Small → Large</span>
+                    <i data-lucide="check" x-show="sortBy === 'size-asc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('size-desc')">
+                    <span class="dropdown-icon"><i data-lucide="arrow-down-wide-narrow" style="width:14px;height:14px;"></i></span>
+                    <span>Size Large → Small</span>
+                    <i data-lucide="check" x-show="sortBy === 'size-desc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('date-desc')">
+                    <span class="dropdown-icon"><i data-lucide="calendar" style="width:14px;height:14px;"></i></span>
+                    <span>Date Newest First</span>
+                    <i data-lucide="check" x-show="sortBy === 'date-desc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('date-asc')">
+                    <span class="dropdown-icon"><i data-lucide="calendar" style="width:14px;height:14px;"></i></span>
+                    <span>Date Oldest First</span>
+                    <i data-lucide="check" x-show="sortBy === 'date-asc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('type-asc')">
+                    <span class="dropdown-icon"><i data-lucide="file-type-2" style="width:14px;height:14px;"></i></span>
+                    <span>Type A → Z</span>
+                    <i data-lucide="check" x-show="sortBy === 'type-asc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('type-desc')">
+                    <span class="dropdown-icon"><i data-lucide="file-type-2" style="width:14px;height:14px;"></i></span>
+                    <span>Type Z → A</span>
+                    <i data-lucide="check" x-show="sortBy === 'type-desc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+            </div>
         </div>
 
         <div class="modal-backdrop" x-show="sheet !== null" x-transition.opacity x-on:click.self="closeSheet()"
@@ -689,6 +939,11 @@
                         <span>Properties</span>
                     </button>
 
+                    <button class="sheet-btn" x-on:click="openRename(sheet)">
+                        <span class="sheet-btn-icon"><i data-lucide="pencil" style="width:16px;height:16px;"></i></span>
+                        <span>Rename</span>
+                    </button>
+
                     <button class="sheet-btn danger" x-on:click="deleteFile(sheet)">
                         <span class="sheet-btn-icon"><i data-lucide="trash-2"
                                 style="width:16px;height:16px;"></i></span>
@@ -709,25 +964,20 @@
                 Open
             </button>
 
-            <a class="ctx-item" x-show="!contextMenu?.file?.isDir" x-bind:href="'/download?path=' + encodeURIComponent(contextMenu?.file?.path ?? '')"
+            <a class="ctx-item" x-bind:href="'/download?path=' + encodeURIComponent(contextMenu?.file?.path ?? '')"
                 x-on:click.prevent="window.location.href = '/download?path=' + encodeURIComponent(contextMenu.file.path); closeContextMenu()">
                 <span class="ctx-icon"><i data-lucide="download" style="width:14px;height:14px;"></i></span>
                 Download
             </a>
 
-            <button class="ctx-item" x-on:click="
-                window.dispatchEvent(new CustomEvent('trigger-rename-modal', { 
-                    detail: { name: contextMenu.file.name, url: contextMenu.file.path } 
-                }));
-                contextMenu = null;
-            ">
-                <span class="ctx-icon"><i data-lucide="edit-2" style="width:14px;height:14px;"></i></span>
-                Rename
-            </button>
-
             <button class="ctx-item" x-on:click="openProperties(contextMenu.file)">
                 <span class="ctx-icon"><i data-lucide="info" style="width:14px;height:14px;"></i></span>
                 Properties
+            </button>
+
+            <button class="ctx-item" x-on:click="openRename(contextMenu.file)">
+                <span class="ctx-icon"><i data-lucide="pencil" style="width:14px;height:14px;"></i></span>
+                Rename
             </button>
 
             <div class="ctx-divider"></div>
@@ -815,11 +1065,65 @@
         </div>
 
         <span id="init-path" data-path="{{ current_path }}" style="display:none"></span>
+        <div class="batch-action-bar"
+            x-show="selectMode"
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="opacity-0 translate-y-4"
+            x-transition:enter-end="opacity-100 translate-y-0"
+            x-transition:leave="transition ease-in duration-150"
+            x-transition:leave-start="opacity-100 translate-y-0"
+            x-transition:leave-end="opacity-0 translate-y-4"
+            style="display:none">
+
+            <!-- Cancel -->
+            <button class="batch-btn batch-btn-cancel" x-on:click="exitSelectMode()" aria-label="Cancel">
+                <i data-lucide="x" style="width:15px;height:15px;"></i>
+            </button>
+
+            <!-- Count -->
+            <span class="batch-count" x-text="`${selectedItems.length} selected`"></span>
+
+            <!-- Divider -->
+            <div class="batch-divider"></div>
+
+            <!-- Download -->
+            <button class="batch-btn" x-on:click="downloadSelected()" :disabled="selectedItems.length === 0" aria-label="Download">
+                <i data-lucide="download" style="width:15px;height:15px;"></i>
+            </button>
+
+            <!-- Delete -->
+            <button class="batch-btn batch-btn-danger" x-on:click="deleteSelected()" :disabled="selectedItems.length === 0" aria-label="Delete">
+                <i data-lucide="trash-2" style="width:15px;height:15px;"></i>
+            </button>
+        </div>
     </div>
 
     <script>
+        function snapBreadcrumbs() {
+            const crumbs = document.querySelector('.breadcrumbs');
+            if (!crumbs) return;
+            const current = crumbs.querySelector('.crumb-current');
+            if (current) {
+                // Peek ~48px before the current directory so user sees it's scrollable
+                crumbs.scrollLeft = current.offsetLeft - 48;
+            } else {
+                crumbs.scrollLeft = 0;
+            }
+        }
+
+        document.addEventListener('htmx:afterSwap', (event) => {
+            if (window.lucide) lucide.createIcons();
+            snapBreadcrumbs();
+            // Re-initialize Alpine on the swapped-in subtree so that
+            // directives on new rows (:class, @pointerdown etc.) are picked up
+            if (window.Alpine) Alpine.initTree(event.detail.target);
+            window.__airnode?.sortFiles();
+            window.__airnode?.applyFilters();
+        });
+
         document.addEventListener('DOMContentLoaded', () => {
             if (window.lucide) lucide.createIcons();
+            snapBreadcrumbs();
         });
     </script>
 </body>
