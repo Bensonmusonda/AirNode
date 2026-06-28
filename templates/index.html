@@ -27,12 +27,15 @@
                 sheet: null,
                 viewer: null,
                 searchOpen: false,
-                settingsOpen: null, // Track dropdown state coordinates or null
+                settingsOpen: null, 
                 darkMode: localStorage.getItem('darkMode') === 'true',
                 contextMenu: null,
-
                 menuOpen: false, 
                 propertiesData: null, 
+
+                get itemCount() {
+                    return this.folderCount + this.fileCount;
+                },
 
                 init() {
                     this.currentPath = document.getElementById('init-path').dataset.path;
@@ -44,10 +47,21 @@
                         document.documentElement.classList.remove('dark');
                     }
 
+
                     document.addEventListener('click', () => {
                         this.contextMenu = null;
                         this.settingsOpen = null;
                     });
+
+                    window.addEventListener('scroll', () => {
+                        this.contextMenu = null;
+                        this.settingsOpen = null;
+                    }, { passive: true });
+
+                    window.addEventListener('touchmove', () => {
+                        this.contextMenu = null;
+                        this.settingsOpen = null;
+                    }, { passive: true });
                 },
 
                 updateCount() {
