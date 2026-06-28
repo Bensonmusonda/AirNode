@@ -1,0 +1,73 @@
+{# Out-of-band updates for the breadcrumbs navigation bar #}
+<div hx-swap-oob="innerHTML:#path-bar">
+    <span class="path-prompt">›</span>
+    <div class="breadcrumbs">
+        <span class="crumb-root">/</span>
+        {% for crumb in breadcrumbs %}
+        {% if not loop.last %}
+        <span class="crumb">
+            <button hx-get="/browse?path={{ crumb.path | urlencode }}" hx-target="#file-list-region" hx-swap="innerHTML"
+                hx-push-url="/browse?path={{ crumb.path | urlencode }}"
+                x-on:click="currentPath = '{{ crumb.path }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = '');">{{
+                crumb.label }}</button>
+            <span class="crumb-sep">/</span>
+        </span>
+        {% else %}
+        <span class="crumb-current">{{ crumb.label }}</span>
+        {% endif %}
+        {% endfor %}
+    </div>
+    <span class="path-cursor"></span>
+</div>
+
+{# Directory and file entries listing #}
+{% if entries %}
+<ul class="file-list">
+    {% for entry in entries %}
+    <li class="file-row" data-name="{{ entry.name }}">
+
+        {% if entry.type == "directory" %}
+        <button class="row-btn" hx-get="/browse?path={{ entry.path | urlencode }}" hx-target="#file-list-region"
+            hx-swap="innerHTML" hx-push-url="/browse?path={{ entry.path | urlencode }}"
+            x-on:click="currentPath = '{{ entry.path }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = ''); $nextTick(() => updateCount())">
+            <span class="row-icon">📁</span>
+            <span class="row-name is-dir">{{ entry.name }}</span>
+            <span class="row-meta"></span>
+            <span class="row-chevron">›</span>
+        </button>
+
+        {% else %}
+        {# Clicking a file row displays the context menu / action sheet #}
+        <button class="row-btn" x-on:click="openModal({
+              name: '{{ entry.name | replace("'", "\\'") }}',
+              path: '{{ entry.path | replace("'", "\\'") }}',
+              size: '{{ entry.size_display }}',
+              ext:  '{{ entry.ext }}',
+              viewable: {{ 'true' if entry.viewable else 'false' }}
+            })">
+            <span class="row-icon">
+                {% set ext = entry.ext %}
+                {% if ext in ['mp4', 'mkv', 'avi', 'mov', 'webm'] %}🎬
+                {% elif ext in ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a'] %}🎵
+                {% elif ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'heic'] %}🖼️
+                {% elif ext in ['pdf'] %}📄
+                {% elif ext in ['zip', 'tar', 'gz', 'rar', '7z'] %}🗜️
+                {% elif ext in ['py', 'js', 'ts', 'rs', 'c', 'cpp', 'go', 'java', 'sh', 'json', 'md', 'txt'] %}📝
+                {% else %}📄
+                {% endif %}
+            </span>
+            <span class="row-name is-file">{{ entry.name }}</span>
+            <span class="row-meta">{{ entry.size_display }}</span>
+        </button>
+        {% endif %}
+
+    </li>
+    {% endfor %}
+</ul>
+
+{% else %}
+<div class="empty-state">
+    <span class="empty-icon">◌</span>
+    <span>Empty directory</span>
+</div>
+{% endif %}
