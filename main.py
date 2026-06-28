@@ -1,13 +1,21 @@
+import aiofiles
 import os
 import sys
+import shutil
 import string
 import ctypes
 import mimetypes
+import json
+import traceback
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi import UploadFile, Form, File
+from fastapi.concurrency import run_in_threadpool
+import time
+
 
 app = FastAPI(title="AirNode")
 
@@ -191,7 +199,123 @@ def download(path: str):
         headers={"Content-Disposition": f'attachment; filename="{target.name}"'},
     )
 
+@app.post("/delete")
+def delete_item(request: Request, path: str):
+    """Deletes a file or directory securely if it passes validation."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Item not found.")
+        
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+            
+        # Return a trigger header to tell HTMX to refresh the current directory view
+        return HTMLResponse(
+            status_code=200, 
+            headers={"HX-Trigger": "refresh-directory"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
+@app.post("/upload", response_class=HTMLResponse)
+async def upload_file(
+    request: Request, 
+    path: str = Form(""), 
+    force_overwrite: str = Form("false"),
+    file: UploadFile = File(...)
+):
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="No file payload provided.")
+
+    try:
+        # 1. Resolve Path
+        cleaned_path_str = path.strip()
+        if not cleaned_path_str or cleaned_path_str == "undefined":
+            target_dir = ROOTS[0] if ROOTS else Path("C:/")
+        else:
+            target_dir = Path(cleaned_path_str.replace("\\", "/"))
+
+        if not target_dir.exists() or not target_dir.is_dir():
+            return HTMLResponse(status_code=400, content="Target folder does not exist.")
+
+        safe_filename = Path(file.filename).name
+        destination = target_dir / safe_filename
+
+        # 2. Collision Guard Rails Check
+        if destination.exists() and force_overwrite != "true":
+            # Stop right here and tell the client-side UI to pop the modal!
+            return HTMLResponse(
+                status_code=200,
+                content="",
+                headers={
+                    "HX-Trigger": json.dumps({
+                        "file-collision-detected": {"filename": safe_filename}
+                    })
+                }
+            )
+
+        # 3. Stream binary chunks to disk
+        def write_chunk(data_chunk, is_first_chunk):
+            mode = "wb" if is_first_chunk else "ab"
+            with open(destination, mode) as f:
+                f.write(data_chunk)
+
+        is_first = True
+        while True:
+            chunk = await file.read(1024 * 64)
+            if not chunk:
+                break
+            await run_in_threadpool(write_chunk, chunk, is_first)
+            is_first = False
+
+    except Exception as e:
+        print("\n" + "="*60 + "\n[AirNode Upload Error Traceback]")
+        traceback.print_exc()
+        print("="*60 + "\n")
+        return HTMLResponse(status_code=500, content=f"Upload error: {str(e)}")
+    finally:
+        await file.close()
+
+    return HTMLResponse(
+        status_code=200,
+        content="",
+        headers={
+            "HX-Trigger": json.dumps({
+                "refresh-directory": {},
+                "show-toast": {"message": f"Successfully uploaded {safe_filename}", "type": "success"}
+            })
+        }
+    )
+
+@app.get("/properties")
+def get_properties(path: str):
+    """Calculates granular system metrics and permissions for the properties dialog."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Not found.")
+        
+    try:
+        stat = target.stat()
+        created = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_ctime))
+        modified = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))
+        
+        return {
+            "name": target.name,
+            "path": str(target).replace("\\", "/"),
+            "type": "Folder" if target.is_dir() else "File",
+            "size": format_size(stat.st_size) if target.is_file() else "Directory containing items",
+            "created": created,
+            "modified": modified
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 # === Streaming File Viewer Endpoint (with HTTP Range request support) ===
 
 CHUNK = 1024 * 512  # 512 KB chunks

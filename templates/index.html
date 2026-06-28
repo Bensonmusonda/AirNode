@@ -7,6 +7,8 @@
     <title>AirNode</title>
     <meta name="description" content="AirNode – local network file explorer and media server." />
 
+    <link rel="stylesheet" href="/static/css/app.css" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -23,24 +25,27 @@
                 sheet: null,
                 viewer: null,
                 searchOpen: false,
-                settingsOpen: false,
+                settingsOpen: null, // Track dropdown state coordinates or null
                 darkMode: localStorage.getItem('darkMode') === 'true',
-                contextMenu: null,   // { x, y, file }
+                contextMenu: null,
+
+                // ── Add these lines to initialize your missing variables ──
+                menuOpen: false, 
+                propertiesData: null, 
 
                 init() {
                     this.currentPath = document.getElementById('init-path').dataset.path;
                     this.updateCount();
 
-                    // Apply dark mode on initialization
                     if (this.darkMode) {
                         document.documentElement.classList.add('dark');
                     } else {
                         document.documentElement.classList.remove('dark');
                     }
 
-                    // Close context menu on outside click
                     document.addEventListener('click', () => {
                         this.contextMenu = null;
+                        this.settingsOpen = null;
                     });
                 },
 
@@ -101,6 +106,57 @@
                     }
                 },
 
+                triggerUpload() {
+                    document.getElementById('hidden-upload-field').click();
+                },
+
+                handleFileUpload(event) {
+                    const file = event.target.files[0];
+                    if (!file) return;
+
+                    const formData = new FormData();
+                    formData.append('path', this.currentPath);
+                    formData.append('file', file);
+
+                    fetch('/upload', {
+                        method: 'POST',
+                        body: formData
+                    })
+                        .then(res => {
+                            if (res.ok) {
+                                document.body.dispatchEvent(new CustomEvent('refresh-directory'));
+                                this.menuOpen = false;
+                            } else {
+                                alert('Upload transaction rejected by host.');
+                            }
+                        });
+                },
+
+                openProperties(file) {
+                    fetch(`/properties?path=${encodeURIComponent(file.path)}`)
+                        .then(r => r.json())
+                        .then(data => {
+                            this.propertiesData = data;
+                            this.contextMenu = null;
+                            this.sheet = null;
+                        });
+                },
+
+                deleteFile(file) {
+                    if (!confirm(`Permanently drop tracking for "${file.name}"? This action is irreversible.`)) return;
+
+                    fetch(`/delete?path=${encodeURIComponent(file.path)}`, { method: 'POST' })
+                        .then(res => {
+                            if (res.ok) {
+                                document.body.dispatchEvent(new CustomEvent('refresh-directory'));
+                                this.contextMenu = null;
+                                this.sheet = null;
+                            } else {
+                                alert('Failed to complete filesystem item deletion.');
+                            }
+                        });
+                },
+
                 toggleDarkMode() {
                     this.darkMode = !this.darkMode;
                     localStorage.setItem('darkMode', this.darkMode);
@@ -115,900 +171,17 @@
     </script>
 
     <script src="/static/vendor/alpine.min.js" defer></script>
-
-    <style>
-        /* ── Design Tokens ─────────────────────────────────────────── */
-        :root {
-            --bg: #f5f5f4;
-            --surface: #faf9f8;
-            /* Soft off-white to replace blinding pure white */
-            --surface-2: #f0efee;
-            --border: #e2e0de;
-            --border-deep: #ccc9c6;
-            --text: #3d3d3d;
-            --text-2: #575552;
-            --muted: #9c9894;
-            --hover: #edecea;
-            --active: #e5e3e1;
-            --danger: #c0392b;
-
-            --font: 'Inter', system-ui, -apple-system, sans-serif;
-            --radius-sm: 6px;
-            --radius: 10px;
-            --radius-lg: 16px;
-            --row-h: 48px;
-            --shadow: 0 1px 4px rgba(0, 0, 0, .06), 0 2px 12px rgba(0, 0, 0, .04);
-            --shadow-lg: 0 4px 24px rgba(0, 0, 0, .10), 0 1px 4px rgba(0, 0, 0, .06);
-        }
-
-        .dark {
-            /* Swapped grey shades: body (--bg) is now lighter, top/bottom bars (--surface) are darker */
-            --bg: #2b2a29;
-            --surface: #1c1c1b;
-            --surface-2: #383735;
-            --border: #3d3c3a;
-            --border-deep: #4f4d4a;
-            --text: #edecea;
-            --text-2: #ccc9c6;
-            --muted: #8a8784;
-            --hover: #333230;
-            --active: #454341;
-        }
-
-        *,
-        *::before,
-        *::after {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        html,
-        body {
-            background: var(--bg);
-            color: var(--text);
-            font-family: var(--font);
-            font-size: 14px;
-            line-height: 1.5;
-            min-height: 100dvh;
-        }
-
-        a {
-            color: inherit;
-            text-decoration: none;
-        }
-
-        button {
-            cursor: pointer;
-            font-family: inherit;
-        }
-
-        /* ── Layout ────────────────────────────────────────────────── */
-        .layout {
-            display: flex;
-            flex-direction: column;
-            height: 100dvh;
-            overflow: hidden;
-        }
-
-        /* ── Header ────────────────────────────────────────────────── */
-        .header {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            padding: 0 20px;
-            height: 52px;
-            background: var(--surface);
-            /* Thin section border removed - color contrast handles separation */
-            flex-shrink: 0;
-        }
-
-        .wordmark {
-            color: var(--text);
-            font-size: 15px;
-            font-weight: 600;
-            letter-spacing: -0.01em;
-            flex-shrink: 0;
-        }
-
-        .header-div {
-            width: 1px;
-            height: 18px;
-            background: var(--border-deep);
-            flex-shrink: 0;
-        }
-
-        /* ── Path Bar ──────────────────────────────────────────────── */
-        .path-bar {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            gap: 2px;
-            overflow: hidden;
-            min-width: 0;
-        }
-
-        .breadcrumbs {
-            display: flex;
-            align-items: center;
-            overflow: hidden;
-            white-space: nowrap;
-            gap: 2px;
-        }
-
-        .crumb-root {
-            color: var(--muted);
-            font-size: 13px;
-            padding: 2px 4px;
-        }
-
-        .crumb {
-            display: inline-flex;
-            align-items: center;
-            color: var(--muted);
-            font-size: 13px;
-        }
-
-        .crumb button {
-            background: none;
-            border: none;
-            padding: 3px 5px;
-            color: var(--text-2);
-            font-size: 13px;
-            border-radius: var(--radius-sm);
-            transition: background 0.12s;
-        }
-
-        .crumb button:hover {
-            background: var(--hover);
-            color: var(--text);
-        }
-
-        .crumb-sep {
-            color: var(--border-deep);
-            font-size: 14px;
-            padding: 0 1px;
-            user-select: none;
-        }
-
-        .crumb-current {
-            color: var(--text);
-            font-size: 13px;
-            font-weight: 500;
-            padding: 3px 5px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        /* ── Floating Controls Container ───────────────────────────── */
-        .floating-controls {
-            position: fixed;
-            bottom: 56px;
-            right: 24px;
-            left: 24px;
-            /* Added left alignment to allow full expansion space */
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 12px;
-            z-index: 60;
-            pointer-events: none;
-            /* Allows clicks to pass through empty regions of the container */
-        }
-
-        .floating-controls>* {
-            pointer-events: auto;
-            /* Restores click tracking for actual buttons */
-        }
-
-        .fab-btn {
-            width: 44px;
-            height: 44px;
-            border-radius: var(--radius);
-            background: var(--text);
-            color: var(--surface);
-            border: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: var(--shadow-lg);
-            transition: background 0.15s, transform 0.15s, color 0.15s;
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-
-        .fab-btn:hover {
-            background: var(--text-2);
-            transform: scale(1.04);
-        }
-
-        /* ── Inline Expandable Search ──────────────────────────────── */
-        .search-container {
-            display: flex;
-            align-items: center;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            box-shadow: var(--shadow-lg);
-            height: 44px;
-            width: 44px;
-            /* Collapsed width */
-            overflow: hidden;
-            transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.15s;
-        }
-
-        .search-container.is-active {
-            width: 100%;
-            /* Spans full screen width bounded by parent controls margin wrapper */
-            border-color: var(--text-2);
-        }
-
-        .search-input-inline {
-            flex: 1;
-            height: 100%;
-            background: transparent;
-            border: none;
-            padding: 0 14px;
-            color: var(--text);
-            font-family: var(--font);
-            font-size: 14px;
-            outline: none;
-            min-width: 0;
-        }
-
-        .search-input-inline::placeholder {
-            color: var(--muted);
-        }
-
-        .search-trigger {
-            width: 42px;
-            height: 42px;
-            border-radius: calc(var(--radius) - 1px);
-            background: var(--text);
-            color: var(--surface);
-            border: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: background 0.15s, transform 0.15s;
-            flex-shrink: 0;
-            cursor: pointer;
-        }
-
-        .search-trigger:hover {
-            background: var(--text-2);
-        }
-
-        .search-container.is-active .search-trigger {
-            background: transparent;
-            color: var(--text);
-        }
-
-        .search-container.is-active .search-trigger:hover {
-            background: var(--hover);
-        }
-
-        /* ── Settings Panel Slide-Over ─────────────────────────────── */
-        .settings-panel {
-            position: fixed;
-            inset: 0 0 0 auto;
-            width: min(400px, 100vw);
-            background: var(--surface);
-            border-left: 1px solid var(--border);
-            z-index: 150;
-            display: flex;
-            flex-direction: column;
-            box-shadow: var(--shadow-lg);
-        }
-
-        .settings-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 0 16px;
-            height: 52px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .settings-close {
-            background: none;
-            border: none;
-            color: var(--text);
-            display: flex;
-            padding: 6px;
-            border-radius: var(--radius-sm);
-            cursor: pointer;
-        }
-
-        .settings-close:hover {
-            background: var(--hover);
-        }
-
-        .settings-title {
-            font-size: 15px;
-            font-weight: 600;
-        }
-
-        .settings-body {
-            padding: 24px 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 24px;
-        }
-
-        .settings-group {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .settings-label {
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--muted);
-        }
-
-        .settings-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 14px 16px;
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-        }
-
-        .settings-info {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
-
-        .settings-item-title {
-            font-size: 13px;
-            font-weight: 500;
-        }
-
-        .settings-item-desc {
-            font-size: 11px;
-            color: var(--muted);
-        }
-
-        /* Toggle Switch */
-        .toggle-switch {
-            width: 44px;
-            height: 24px;
-            background: var(--border-deep);
-            border: none;
-            border-radius: 12px;
-            position: relative;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .toggle-switch.is-on {
-            background: var(--text);
-        }
-
-        .toggle-knob {
-            width: 20px;
-            height: 20px;
-            background: var(--surface);
-            border-radius: 50%;
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            transition: transform 0.2s;
-        }
-
-        .toggle-switch.is-on .toggle-knob {
-            transform: translateX(20px);
-        }
-
-        /* ── File List ─────────────────────────────────────────────── */
-        .list-wrap {
-            flex: 1;
-            overflow-y: auto;
-            padding: 0;
-        }
-
-        .list-wrap::-webkit-scrollbar {
-            width: 4px;
-        }
-
-        .list-wrap::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        .list-wrap::-webkit-scrollbar-thumb {
-            background: var(--border-deep);
-            border-radius: 2px;
-        }
-
-        .file-list {
-            list-style: none;
-        }
-
-        .file-row {
-            display: flex;
-            align-items: center;
-            min-height: var(--row-h);
-            padding: 0 8px 0 20px;
-            transition: background 0.1s;
-            position: relative;
-        }
-
-        /* Rounded row inner border divider with end margins */
-        .file-row::after {
-            content: "";
-            position: absolute;
-            bottom: 0;
-            left: 20px;
-            right: 20px;
-            height: 1px;
-            background-color: var(--border);
-            border-radius: 1px;
-        }
-
-        .file-row:last-child::after {
-            display: none;
-            /* Hide divider line for the trailing item */
-        }
-
-        .file-row:hover {
-            background: var(--hover);
-        }
-
-        .file-row:active {
-            background: var(--active);
-        }
-
-        /* Main clickable area */
-        .row-btn {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex: 1;
-            min-width: 0;
-            background: none;
-            border: none;
-            padding: 12px 0;
-            color: inherit;
-            text-align: left;
-            cursor: pointer;
-        }
-
-        /* Icon column */
-        .row-icon {
-            flex-shrink: 0;
-            width: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--muted);
-        }
-
-        .row-icon.is-dir {
-            color: var(--text-2);
-        }
-
-        .row-icon.is-img {
-            color: #6b7280;
-        }
-
-        .row-icon.is-vid {
-            color: #6b7280;
-        }
-
-        .row-icon.is-aud {
-            color: #6b7280;
-        }
-
-        .row-icon.is-code {
-            color: #6b7280;
-        }
-
-        /* Name */
-        .row-name {
-            flex: 1;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            font-size: 14px;
-            color: var(--text);
-        }
-
-        .row-name.is-dir {
-            font-weight: 500;
-        }
-
-        /* Meta (file size) */
-        .row-meta {
-            color: var(--muted);
-            font-size: 12px;
-            flex-shrink: 0;
-            padding-right: 8px;
-        }
-
-        /* Chevron for directories */
-        .row-chevron {
-            color: var(--border-deep);
-            flex-shrink: 0;
-            display: flex;
-        }
-
-        /* Three-dot menu button */
-        .row-menu-btn {
-            flex-shrink: 0;
-            background: none;
-            border: none;
-            color: var(--muted);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 32px;
-            height: 32px;
-            border-radius: var(--radius-sm);
-            transition: background 0.12s, color 0.12s;
-            opacity: 1;
-            /* Always visible on mobile/touch screens by default */
-        }
-
-        @media (pointer: fine) {
-            .row-menu-btn {
-                opacity: 0;
-                /* Hidden on hover-capable desktop screens (mouse/pointer) until hovered */
-            }
-
-            .file-row:hover .row-menu-btn,
-            .row-menu-btn:focus-within {
-                opacity: 1;
-            }
-        }
-
-        .row-menu-btn:hover {
-            background: var(--active);
-            color: var(--text);
-        }
-
-        /* ── Context Menu ──────────────────────────────────────────── */
-        .ctx-menu {
-            position: fixed;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            box-shadow: var(--shadow-lg);
-            padding: 4px;
-            z-index: 200;
-            min-width: 180px;
-            animation: fadeIn 0.12s ease;
-        }
-
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: scale(0.96);
-            }
-
-            to {
-                opacity: 1;
-                transform: scale(1);
-            }
-        }
-
-        .ctx-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            width: 100%;
-            padding: 9px 12px;
-            background: none;
-            border: none;
-            border-radius: var(--radius-sm);
-            color: var(--text);
-            font-size: 13px;
-            text-align: left;
-            text-decoration: none;
-            transition: background 0.1s;
-            cursor: pointer;
-        }
-
-        .ctx-item:hover {
-            background: var(--hover);
-        }
-
-        .ctx-item.danger {
-            color: var(--danger);
-        }
-
-        .ctx-item .ctx-icon {
-            color: var(--muted);
-            flex-shrink: 0;
-            display: flex;
-        }
-
-        .ctx-item.danger .ctx-icon {
-            color: var(--danger);
-        }
-
-        .ctx-divider {
-            height: 1px;
-            background: var(--border);
-            margin: 4px 0;
-        }
-
-        /* ── Empty State ───────────────────────────────────────────── */
-        .empty-state {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            padding: 80px 24px;
-            color: var(--muted);
-            font-size: 14px;
-        }
-
-        .empty-icon {
-            display: flex;
-            color: var(--border-deep);
-        }
-
-        /* ── Loading ───────────────────────────────────────────────── */
-        .htmx-indicator {
-            display: none;
-            padding: 20px;
-            text-align: center;
-            color: var(--muted);
-            font-size: 13px;
-        }
-
-        .htmx-request .htmx-indicator {
-            display: block;
-        }
-
-        /* ── Status Bar ────────────────────────────────────────────── */
-        .status-bar {
-            padding: 0 20px;
-            height: 36px;
-            background: var(--surface);
-            /* Thin section border removed - color contrast handles separation */
-            color: var(--muted);
-            font-size: 12px;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            flex-shrink: 0;
-        }
-
-        .status-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #4ade80;
-            display: inline-block;
-        }
-
-        .status-path {
-            margin-left: auto;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        /* ── Modal Backdrop ────────────────────────────────────────── */
-        .modal-backdrop {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.40);
-            display: flex;
-            align-items: flex-end;
-            justify-content: center;
-            z-index: 100;
-        }
-
-        /* ── Action Sheet ──────────────────────────────────────────── */
-        .action-sheet {
-            background: var(--surface);
-            border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-            width: 100%;
-            max-width: 480px;
-            padding: 20px 20px 36px;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            border-top: 1px solid var(--border);
-        }
-
-        .sheet-handle {
-            width: 36px;
-            height: 4px;
-            background: var(--border-deep);
-            border-radius: 2px;
-            align-self: center;
-            margin-bottom: 16px;
-        }
-
-        .sheet-filename {
-            color: var(--text);
-            font-size: 14px;
-            font-weight: 600;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            padding: 0 4px;
-        }
-
-        .sheet-meta {
-            color: var(--muted);
-            font-size: 12px;
-            margin-bottom: 12px;
-            padding: 0 4px;
-        }
-
-        .sheet-actions {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .sheet-btn {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            width: 100%;
-            padding: 13px 14px;
-            background: var(--surface-2);
-            border: none;
-            border-radius: var(--radius);
-            color: var(--text);
-            font-size: 14px;
-            cursor: pointer;
-            text-align: left;
-            transition: background 0.12s;
-            text-decoration: none;
-        }
-
-        .sheet-btn:hover {
-            background: var(--active);
-        }
-
-        .sheet-btn-icon {
-            color: var(--text-2);
-            flex-shrink: 0;
-            display: flex;
-        }
-
-        .sheet-cancel {
-            margin-top: 8px;
-            background: none;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            color: var(--text-2);
-            font-size: 14px;
-            padding: 11px;
-            width: 100%;
-            cursor: pointer;
-            transition: background 0.12s;
-        }
-
-        .sheet-cancel:hover {
-            background: var(--hover);
-        }
-
-        /* ── Viewer Modal ──────────────────────────────────────────── */
-        .viewer-wrap {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.92);
-            display: flex;
-            flex-direction: column;
-            z-index: 110;
-        }
-
-        .viewer-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 0 16px;
-            height: 52px;
-            background: rgba(255, 255, 255, 0.04);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            flex-shrink: 0;
-        }
-
-        .viewer-close {
-            background: none;
-            border: none;
-            color: rgba(255, 255, 255, 0.5);
-            display: flex;
-            padding: 6px;
-            border-radius: var(--radius-sm);
-            transition: color 0.1s, background 0.1s;
-        }
-
-        .viewer-close:hover {
-            color: #fff;
-            background: rgba(255, 255, 255, 0.08);
-        }
-
-        .viewer-title {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            font-size: 14px;
-            color: rgba(255, 255, 255, 0.85);
-        }
-
-        .viewer-dl {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 7px 14px;
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: var(--radius-sm);
-            color: rgba(255, 255, 255, 0.75);
-            font-size: 12px;
-            transition: background 0.12s;
-            text-decoration: none;
-        }
-
-        .viewer-dl:hover {
-            background: rgba(255, 255, 255, 0.14);
-            color: #fff;
-        }
-
-        .viewer-body {
-            flex: 1;
-            overflow: auto;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 24px;
-        }
-
-        .viewer-body img {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-            border-radius: var(--radius);
-        }
-
-        .viewer-body video,
-        .viewer-body audio {
-            max-width: 100%;
-            max-height: 100%;
-            outline: none;
-        }
-
-        .viewer-body iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-            background: #fff;
-            border-radius: var(--radius-sm);
-        }
-
-        .viewer-body pre {
-            color: rgba(255, 255, 255, 0.85);
-            font-family: 'JetBrains Mono', 'Fira Code', monospace;
-            font-size: 13px;
-            line-height: 1.65;
-            white-space: pre-wrap;
-            word-break: break-all;
-            max-width: 800px;
-            width: 100%;
-        }
-    </style>
 </head>
 
 <body>
-    <div class="layout" x-data="airnode" x-init="init()">
+    <input type="file" id="hidden-upload-field" style="display:none;" x-data
+        x-on:change="$data.handleFileUpload($event)" />
+
+    <div class="layout" 
+        x-data="airnode"
+        x-on:refresh-directory.window="
+            htmx.ajax('GET', '/browse?path=' + encodeURIComponent(currentPath), { target: '#file-list-region', swap: 'innerHTML' })
+        ">
 
         <header class="header">
             <span class="wordmark">AirNode</span>
@@ -1017,6 +190,13 @@
                     {% include "partials/breadcrumbs.html" %}
                 </div>
             </nav>
+
+            <button class="row-menu-btn" x-on:click.stop="
+                        const rect = $el.getBoundingClientRect();
+                        settingsOpen = { x: rect.right - 200, y: rect.bottom + 6 };
+                    " aria-label="Open menu">
+                <i data-lucide="menu" style="width:18px;height:18px;"></i>
+            </button>
         </header>
 
         <main class="list-wrap">
@@ -1033,58 +213,154 @@
             <span class="status-path" x-text="currentPath"></span>
         </footer>
 
-        <div class="floating-controls">
-            <button id="fab-settings" class="fab-btn" x-on:click="settingsOpen = true" aria-label="Settings">
-                <i data-lucide="settings" style="width:18px;height:18px;"></i>
+        <div class="modal-overlay" 
+            x-data="{ showModal: false, collisionFilename: '' }"
+            x-show="showModal" 
+            x-on:file-collision-detected.window="showModal = true; collisionFilename = event.detail.filename;"
+            style="display: none;"
+            x-transition>
+            <div class="modal-card" x-on:click.outside="showModal = false">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                    <i data-lucide="info" style="stroke: var(--text-2); width:20px; height:20px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">File Already Exists</h4>
+                </div>
+                <p style="font-size: 13px; color: var(--text-2); margin: 0; line-height: 1.5;">
+                    A file named <strong style="color: var(--text);" x-text="collisionFilename"></strong> already exists in this folder. Overwrite it?
+                </p>
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="showModal = false">Cancel</button>
+                    <button class="modal-btn primary"
+                            x-on:click="
+                                showModal = false;
+                                document.getElementById('force-overwrite-input').value = 'true';
+                                htmx.trigger('#file-upload-form', 'submit');
+                            ">
+                        Overwrite
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="floating-controls" 
+            x-data="{ uploading: false }" 
+            style="display: flex; flex-direction: column; align-items: flex-end; gap: 12px; position: fixed; bottom: 64px; right: 24px; z-index: 1000;">
+            
+            <div class="upload-card-indicator" x-show="uploading" style="display: none;">
+                <div class="spinner"></div>
+                <span style="font-size: 13px; color: var(--text-2);">Uploading file...</span>
+            </div>
+
+            <form id="file-upload-form" 
+                hx-post="/upload" 
+                hx-encoding="multipart/form-data" 
+                hx-swap="none"
+                x-on:htmx:after-request="
+                    uploading = false; 
+                    document.getElementById('file-upload-input').value = '';
+                    document.getElementById('force-overwrite-input').value = 'false';
+                    if(event.detail.xhr.status !== 200) {
+                        window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Upload failed.', type: 'error' } }));
+                    }
+                "
+                style="display: none;">
+                <input type="hidden" name="path" x-bind:value="currentPath" />
+                <input type="hidden" id="force-overwrite-input" name="force_overwrite" value="false" />
+                
+                <input type="file" 
+                    id="file-upload-input" 
+                    name="file" 
+                    x-on:change="
+                        if ($el.files.length > 0) {
+                            uploading = true;
+                            htmx.trigger('#file-upload-form', 'submit');
+                        }
+                    " />
+            </form>
+
+            <button id="fab-upload" class="fab-btn" x-on:click="document.getElementById('file-upload-input').click()" aria-label="Upload File">
+                <i data-lucide="upload" style="width:18px;height:18px;"></i>
             </button>
 
             <div class="search-container" :class="{ 'is-active': searchOpen }">
                 <input id="search-input" class="search-input-inline" type="text" placeholder="Filter files…"
                     autocomplete="off" autocorrect="off" spellcheck="false" x-model="query" x-show="searchOpen"
                     x-on:input="
-                      document.querySelectorAll('.file-row').forEach(row => {
+                    document.querySelectorAll('.file-row').forEach(row => {
                         row.style.display = row.dataset.name.toLowerCase().includes(query.toLowerCase()) ? '' : 'none';
-                      });
-                      updateCount();
+                    });
+                    updateCount();
                     " x-on:keydown.escape="toggleSearch()" />
 
                 <button class="search-trigger" x-on:click.stop="toggleSearch()" aria-label="Toggle search">
-                    <span x-show="!searchOpen" style="display:flex;">
-                        <i data-lucide="search" style="width:18px;height:18px;"></i>
-                    </span>
-                    <span x-show="searchOpen" style="display:flex;">
-                        <i data-lucide="x" style="width:18px;height:18px;" stroke-width="3"></i>
-                    </span>
+                    <span x-show="!searchOpen" style="display:flex;"><i data-lucide="search" style="width:18px;height:18px;"></i></span>
+                    <span x-show="searchOpen" style="display:flex;"><i data-lucide="x" style="width:18px;height:18px;" stroke-width="3"></i></span>
                 </button>
             </div>
         </div>
 
-        <div class="settings-panel" x-show="settingsOpen" x-transition:enter="transition ease-out duration-200"
+        <div class="toast-container" 
+             x-data="{ toasts: [] }" 
+             x-on:show-toast.window="
+                 toasts.push({ id: Date.now(), message: event.detail.message, type: event.detail.type });
+                 setTimeout(() => { toasts = toasts.filter(t => t.id !== toasts[0].id) }, 3500);
+             ">
+            <template x-for="toast in toasts" :key="toast.id">
+                <div class="toast-msg" :class="toast.type">
+                    <i data-lucide="info" x-show="toast.type !== 'error'" style="width:14px;height:14px;"></i>
+                    <i data-lucide="alert-triangle" x-show="toast.type === 'error'" style="width:14px;height:14px;"></i>
+                    <span x-text="toast.message"></span>
+                </div>
+            </template>
+        </div>
+
+        <div class="settings-panel" x-show="menuOpen" x-transition:enter="transition ease-out duration-200"
             x-transition:enter-start="transform translate-x-full" x-transition:enter-end="transform translate-x-0"
             x-transition:leave="transition ease-in duration-150" x-transition:leave-start="transform translate-x-0"
-            x-transition:leave-end="transform translate-x-full" x-on:click.outside="settingsOpen = false"
+            x-transition:leave-end="transform translate-x-full" x-on:click.outside="menuOpen = false"
             style="display:none">
             <div class="settings-header">
-                <button class="settings-close" x-on:click="settingsOpen = false" aria-label="Close settings">
+                <button class="settings-close" x-on:click="menuOpen = false" aria-label="Close options">
                     <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
                 </button>
-                <span class="settings-title">Settings</span>
+                <span class="settings-title">Options</span>
             </div>
             <div class="settings-body">
                 <div class="settings-group">
-                    <div class="settings-label">Appearance</div>
-                    <div class="settings-row">
-                        <div class="settings-info">
-                            <div class="settings-item-title">Dark Mode</div>
-                            <div class="settings-item-desc">Switch to a dark charcoal theme</div>
-                        </div>
-                        <button class="toggle-switch" :class="{ 'is-on': darkMode }" x-on:click="toggleDarkMode()"
-                            aria-label="Toggle Dark Mode">
-                            <span class="toggle-knob"></span>
+                    <div class="settings-label">Actions</div>
+                    <div class="menu-options-list">
+                        <button class="menu-item-btn" x-on:click="triggerUpload()">
+                            <span class="menu-item-icon"><i data-lucide="upload-cloud"
+                                    style="width:16px;height:16px;"></i></span>
+                            <span>Upload File Here</span>
+                        </button>
+                        <button class="menu-item-btn" x-on:click="settingsOpen = true; menuOpen = false;">
+                            <span class="menu-item-icon"><i data-lucide="settings"
+                                    style="width:16px;height:16px;"></i></span>
+                            <span>System Settings</span>
                         </button>
                     </div>
                 </div>
             </div>
+        </div>
+
+        <div class="dropdown-menu" x-show="settingsOpen !== null" x-on:click.outside="settingsOpen = null"
+            x-bind:style="settingsOpen ? `top: ${settingsOpen.y}px; left: ${settingsOpen.x}px;` : ''"
+            style="display:none">
+
+            <button class="dropdown-item" x-on:click="toggleDarkMode()">
+                <span class="dropdown-icon">
+                    <i data-lucide="moon" x-show="!darkMode" style="width:14px;height:14px;"></i>
+                    <i data-lucide="sun" x-show="darkMode" style="width:14px;height:14px;"></i>
+                </span>
+                <span style="flex:1" x-text="darkMode ? 'Light Theme' : 'Dark Theme'"></span>
+            </button>
+
+            <div class="dropdown-divider"></div>
+
+            <button class="dropdown-item" x-on:click="settingsOpen = null">
+                <span class="dropdown-icon"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i></span>
+                <span>Refresh Index</span>
+            </button>
         </div>
 
         <div class="modal-backdrop" x-show="sheet !== null" x-transition.opacity x-on:click.self="closeSheet()"
@@ -1096,19 +372,27 @@
 
                 <div class="sheet-actions">
                     <button class="sheet-btn" x-show="sheet?.viewable" x-on:click="openViewer(sheet)">
-                        <span class="sheet-btn-icon">
-                            <i data-lucide="eye" style="width:16px;height:16px;"></i>
-                        </span>
+                        <span class="sheet-btn-icon"><i data-lucide="eye" style="width:16px;height:16px;"></i></span>
                         <span>Open</span>
                     </button>
 
                     <a class="sheet-btn" x-bind:href="'/download?path=' + encodeURIComponent(sheet?.path ?? '')"
                         x-on:click.prevent="window.location.href = '/download?path=' + encodeURIComponent(sheet.path); closeSheet()">
-                        <span class="sheet-btn-icon">
-                            <i data-lucide="download" style="width:16px;height:16px;"></i>
-                        </span>
+                        <span class="sheet-btn-icon"><i data-lucide="download"
+                                style="width:16px;height:16px;"></i></span>
                         <span>Download</span>
                     </a>
+
+                    <button class="sheet-btn" x-on:click="openProperties(sheet)">
+                        <span class="sheet-btn-icon"><i data-lucide="info" style="width:16px;height:16px;"></i></span>
+                        <span>Properties</span>
+                    </button>
+
+                    <button class="sheet-btn danger" x-on:click="deleteFile(sheet)">
+                        <span class="sheet-btn-icon"><i data-lucide="trash-2"
+                                style="width:16px;height:16px;"></i></span>
+                        <span>Delete Item</span>
+                    </button>
                 </div>
 
                 <button class="sheet-cancel" x-on:click="closeSheet()">Cancel</button>
@@ -1116,8 +400,9 @@
         </div>
 
         <div class="ctx-menu" x-show="contextMenu !== null" x-on:click.stop
-            x-bind:style="contextMenu ? `top:${Math.min(contextMenu.y, window.innerHeight - 160)}px; left:${Math.min(contextMenu.x, window.innerWidth - 200)}px` : ''"
+            x-bind:style="contextMenu ? `top:${Math.min(contextMenu.y, window.innerHeight - 220)}px; left:${Math.min(contextMenu.x, window.innerWidth - 200)}px` : ''"
             style="display:none">
+
             <button class="ctx-item" x-show="contextMenu?.file?.viewable" x-on:click="openViewer(contextMenu.file)">
                 <span class="ctx-icon"><i data-lucide="eye" style="width:14px;height:14px;"></i></span>
                 Open
@@ -1128,6 +413,61 @@
                 <span class="ctx-icon"><i data-lucide="download" style="width:14px;height:14px;"></i></span>
                 Download
             </a>
+
+            <button class="ctx-item" x-on:click="openProperties(contextMenu.file)">
+                <span class="ctx-icon"><i data-lucide="info" style="width:14px;height:14px;"></i></span>
+                Properties
+            </button>
+
+            <div class="ctx-divider"></div>
+
+            <button class="ctx-item danger" x-on:click="deleteFile(contextMenu.file)">
+                <span class="ctx-icon"><i data-lucide="trash-2" style="width:14px;height:14px;"></i></span>
+                Delete
+            </button>
+        </div>
+
+        <div class="settings-panel" x-show="propertiesData !== null"
+            x-transition:enter="transition ease-out duration-200" x-transition:enter-start="transform translate-x-full"
+            x-transition:enter-end="transform translate-x-0" x-transition:leave="transition ease-in duration-150"
+            x-transition:leave-start="transform translate-x-0" x-transition:leave-end="transform translate-x-full"
+            x-on:click.outside="propertiesData = null" style="display:none">
+            <div class="settings-header">
+                <button class="settings-close" x-on:click="propertiesData = null" aria-label="Close properties">
+                    <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
+                </button>
+                <span class="settings-title">Properties</span>
+            </div>
+            <div class="settings-body" style="gap:16px;">
+                <div class="settings-group">
+                    <div class="settings-label">Name</div>
+                    <div class="settings-item-title" x-text="propertiesData?.name" style="word-break:break-all;"></div>
+                </div>
+                <div class="settings-group">
+                    <div class="settings-label">Type</div>
+                    <div class="settings-item-title" x-text="propertiesData?.type"></div>
+                </div>
+                <div class="settings-group">
+                    <div class="settings-label">Size</div>
+                    <div class="settings-item-title" x-text="propertiesData?.size"></div>
+                </div>
+                <div class="settings-group">
+                    <div class="settings-label">Created At</div>
+                    <div class="settings-item-title" x-text="propertiesData?.created" style="color:var(--text-2);">
+                    </div>
+                </div>
+                <div class="settings-group">
+                    <div class="settings-label">Last Modified</div>
+                    <div class="settings-item-title" x-text="propertiesData?.modified" style="color:var(--text-2);">
+                    </div>
+                </div>
+                <div class="settings-group">
+                    <div class="settings-label">System Location</div>
+                    <div class="settings-item-desc" x-text="propertiesData?.path"
+                        style="word-break:break-all; background:var(--surface-2); padding:8px; border-radius:var(--radius); border:1px solid var(--border);">
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="viewer-wrap" x-show="viewer !== null" x-transition.opacity style="display:none">
@@ -1141,28 +481,22 @@
                     Download
                 </a>
             </div>
-
             <div class="viewer-body">
                 <template x-if="viewer?.kind === 'img'">
                     <img x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)" x-bind:alt="viewer.name" />
                 </template>
-
                 <template x-if="viewer?.kind === 'video'">
                     <video controls autoplay x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></video>
                 </template>
-
                 <template x-if="viewer?.kind === 'audio'">
-                    <audio controls autoplay x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></audio>
+                    <audio controls autoplay x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></video>
                 </template>
-
                 <template x-if="viewer?.kind === 'pdf'">
                     <iframe x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></iframe>
                 </template>
-
                 <template x-if="viewer?.kind === 'text'">
-                    <div x-data="{ content: '' }" x-init="fetch('/view?path=' + encodeURIComponent(viewer.path))
-                                .then(r => r.text())
-                                .then(t => content = t)">
+                    <div x-data="{ content: '' }"
+                        x-init="fetch('/view?path=' + encodeURIComponent(viewer.path)).then(r => r.text()).then(t => content = t)">
                         <pre x-text="content"></pre>
                     </div>
                 </template>
@@ -1171,8 +505,8 @@
 
         <span id="init-path" data-path="{{ current_path }}" style="display:none"></span>
     </div>
+
     <script>
-        // Re-render Lucide icons after htmx swaps
         document.addEventListener('htmx:afterSwap', () => {
             if (window.lucide) lucide.createIcons();
         });

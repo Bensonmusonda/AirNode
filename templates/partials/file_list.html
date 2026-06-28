@@ -20,36 +20,37 @@
 {% endif %}
 
 {# Directory and file entries listing #}
-{% if entries %}
-<ul class="file-list">
-    {% for entry in entries %}
-    <li class="file-row" data-name="{{ entry.name }}">
+<div hx-get="/browse?path={{ current_path | urlencode }}" hx-trigger="refresh-directory from:body"
+    hx-target="#file-list-region" hx-swap="innerHTML">
+    {% if entries %}
+    <ul class="file-list">
+        {% for entry in entries %}
+        <li class="file-row" data-name="{{ entry.name }}">
 
-        {% if entry.type == "directory" %}
-        <button class="row-btn" hx-get="/browse?path={{ entry.path | urlencode }}" hx-target="#file-list-region"
-            hx-swap="innerHTML" hx-push-url="/browse?path={{ entry.path | urlencode }}"
-            x-on:click="currentPath = '{{ entry.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = ''); $nextTick(() => updateCount())">
-            <span class="row-icon is-dir">
-                <i data-lucide="folder" fill="currentColor" style="width:16px;height:16px;"></i>
-            </span>
-            <span class="row-name is-dir">{{ entry.name }}</span>
-            <span class="row-meta"></span>
-        </button>
-        <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
+            {% if entry.type == "directory" %}
+            <button class="row-btn" hx-get="/browse?path={{ entry.path | urlencode }}" hx-target="#file-list-region"
+                hx-swap="innerHTML" hx-push-url="/browse?path={{ entry.path | urlencode }}"
+                x-on:click="currentPath = '{{ entry.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = ''); $nextTick(() => updateCount())">
+                <span class="row-icon is-dir">
+                    <i data-lucide="folder" fill="currentColor" style="width:16px;height:16px;"></i>
+                </span>
+                <span class="row-name is-dir">{{ entry.name }}</span>
+                <span class="row-meta"></span>
+            </button>
+            <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
             name: '{{ entry.name | replace("'", "\\'") }}',
             path: '{{ entry.path | replace("'", "\\'") }}',
-            size: '',
+            size: '—',
             ext: '',
             viewable: false,
             isDir: true
         })">
-            <i data-lucide="more-horizontal" style="width:16px;height:16px;"></i>
-        </button>
+                <i data-lucide="more-horizontal" style="width:16px;height:16px;"></i>
+            </button>
 
-        {% else %}
-        {# Clicking a file row: open if viewable, show download modal if not #}
-        {% set is_viewable = 'true' if entry.viewable else 'false' %}
-        <button class="row-btn" x-on:click="
+            {% else %}
+            {% set is_viewable = 'true' if entry.viewable else 'false' %}
+            <button class="row-btn" x-on:click="
             const file = {
                 name: '{{ entry.name | replace("'", "\\'") }}',
                 path: '{{ entry.path | replace("'", "\\'") }}',
@@ -63,28 +64,28 @@
                 openModal(file);
             }
         ">
-            <span class="row-icon">
-                {% set ext = entry.ext %}
-                {% if ext in ['mp4', 'mkv', 'avi', 'mov', 'webm'] %}
+                <span class="row-icon">
+                    {% set ext = entry.ext %}
+                    {% if ext in ['mp4', 'mkv', 'avi', 'mov', 'webm'] %}
                     <i data-lucide="film" style="width:16px;height:16px;"></i>
-                {% elif ext in ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a'] %}
+                    {% elif ext in ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a'] %}
                     <i data-lucide="music" style="width:16px;height:16px;"></i>
-                {% elif ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'heic'] %}
+                    {% elif ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'heic'] %}
                     <i data-lucide="image" style="width:16px;height:16px;"></i>
-                {% elif ext in ['pdf'] %}
+                    {% elif ext in ['pdf'] %}
                     <i data-lucide="file-text" style="width:16px;height:16px;"></i>
-                {% elif ext in ['zip', 'tar', 'gz', 'rar', '7z'] %}
+                    {% elif ext in ['zip', 'tar', 'gz', 'rar', '7z'] %}
                     <i data-lucide="archive" style="width:16px;height:16px;"></i>
-                {% elif ext in ['py', 'js', 'ts', 'rs', 'c', 'cpp', 'go', 'java', 'sh', 'json', 'md', 'txt'] %}
+                    {% elif ext in ['py', 'js', 'ts', 'rs', 'c', 'cpp', 'go', 'java', 'sh', 'json', 'md', 'txt'] %}
                     <i data-lucide="file-code" style="width:16px;height:16px;"></i>
-                {% else %}
+                    {% else %}
                     <i data-lucide="file" style="width:16px;height:16px;"></i>
-                {% endif %}
-            </span>
-            <span class="row-name is-file">{{ entry.name }}</span>
-            <span class="row-meta">{{ entry.size_display }}</span>
-        </button>
-        <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
+                    {% endif %}
+                </span>
+                <span class="row-name is-file">{{ entry.name }}</span>
+                <span class="row-meta">{{ entry.size_display }}</span>
+            </button>
+            <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
             name: '{{ entry.name | replace("'", "\\'") }}',
             path: '{{ entry.path | replace("'", "\\'") }}',
             size: '{{ entry.size_display }}',
@@ -92,17 +93,18 @@
             viewable: {{ is_viewable }},
             isDir: false
         })">
-            <i data-lucide="more-horizontal" style="width:16px;height:16px;"></i>
-        </button>
-        {% endif %}
+                <i data-lucide="more-horizontal" style="width:16px;height:16px;"></i>
+            </button>
+            {% endif %}
 
-    </li>
-    {% endfor %}
-</ul>
-
-{% else %}
-<div class="empty-state">
-    <span class="empty-icon"><i data-lucide="folder-open" fill="currentColor" style="width:28px;height:28px;"></i></span>
-    <span>Empty directory</span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-state">
+        <span class="empty-icon"><i data-lucide="folder-open" fill="currentColor"
+                style="width:28px;height:28px;"></i></span>
+        <span>Empty directory</span>
+    </div>
+    {% endif %}
 </div>
-{% endif %}
