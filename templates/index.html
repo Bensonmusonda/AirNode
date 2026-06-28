@@ -20,7 +20,9 @@
         document.addEventListener('alpine:init', () => {
             Alpine.data('airnode', () => ({
                 query: '',
-                itemCount: 0,
+                // Replace itemCount with split counter states
+                folderCount: 0,
+                fileCount: 0,
                 currentPath: '',
                 sheet: null,
                 viewer: null,
@@ -29,7 +31,6 @@
                 darkMode: localStorage.getItem('darkMode') === 'true',
                 contextMenu: null,
 
-                // ── Add these lines to initialize your missing variables ──
                 menuOpen: false, 
                 propertiesData: null, 
 
@@ -50,9 +51,10 @@
                 },
 
                 updateCount() {
-                    this.itemCount = document.querySelectorAll(
-                        '.file-row:not([style*="display: none"])'
-                    ).length;
+                    const visibleRows = Array.from(document.querySelectorAll('.file-row:not([style*="display: none"])'));
+                    
+                    this.folderCount = visibleRows.filter(row => row.querySelector('[data-lucide="folder"]')).length;
+                    this.fileCount = visibleRows.filter(row => !row.querySelector('[data-lucide="folder"]')).length;
                 },
 
                 openModal(file) {
@@ -203,7 +205,11 @@
         <footer class="status-bar">
             <span><span class="status-dot"></span></span>
             <span>LAN</span>
-            <span x-text="`${itemCount} items`"></span>
+            <span style="display: inline-flex; align-items: center; gap: 6px;">
+                <span x-text="`${folderCount} folder${folderCount === 1 ? '' : 's'}`"></span>
+                <span style="color: var(--text-2); opacity: 0.6;">·</span>
+                <span x-text="`${fileCount} file${fileCount === 1 ? '' : 's'}`"></span>
+            </span>
             <span class="status-path" x-text="currentPath"></span>
         </footer>
 
