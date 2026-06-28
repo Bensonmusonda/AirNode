@@ -1,1 +1,22 @@
+# Specification document
 *.pdf
+
+# Python virtual environment
+.venv/
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+
+# Runtime artifacts
+airnode.pid
+airnode.log
+airnode.log.err
+
+
+# Environment variables
+.env
+
+# OS artefacts
+Thumbs.db
+.DS_Store
