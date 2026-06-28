@@ -143,18 +143,12 @@
                 },
 
                 deleteFile(file) {
-                    if (!confirm(`Permanently drop tracking for "${file.name}"? This action is irreversible.`)) return;
-
-                    fetch(`/delete?path=${encodeURIComponent(file.path)}`, { method: 'POST' })
-                        .then(res => {
-                            if (res.ok) {
-                                document.body.dispatchEvent(new CustomEvent('refresh-directory'));
-                                this.contextMenu = null;
-                                this.sheet = null;
-                            } else {
-                                alert('Failed to complete filesystem item deletion.');
-                            }
-                        });
+                    window.dispatchEvent(new CustomEvent('trigger-delete-modal', { 
+                        detail: { 
+                            name: file.name, 
+                            url: `/delete?path=${encodeURIComponent(file.path)}`
+                        } 
+                    }));
                 },
 
                 toggleDarkMode() {
@@ -232,10 +226,43 @@
                     <button class="modal-btn primary"
                             x-on:click="
                                 showModal = false;
+                                contextMenu = null;
                                 document.getElementById('force-overwrite-input').value = 'true';
                                 htmx.trigger('#file-upload-form', 'submit');
                             ">
                         Overwrite
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal-overlay" 
+            x-data="{ showDeleteModal: false, deleteTargetName: '', deleteTargetUrl: '' }"
+            x-show="showDeleteModal" 
+            x-on:trigger-delete-modal.window="
+                showDeleteModal = true; 
+                deleteTargetName = event.detail.name; 
+                deleteTargetUrl = event.detail.url;
+            "
+            style="display: none;"
+            x-transition>
+            <div class="modal-card" x-on:click.outside="showDeleteModal = false">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                    <i data-lucide="trash-2" style="stroke: var(--text-2); width:19px; height:19px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">Delete File</h4>
+                </div>
+                <p style="font-size: 13px; color: var(--text-2); margin: 0; line-height: 1.5;">
+                    Permanently drop tracking for <strong style="color: var(--text);" x-text="deleteTargetName"></strong>? This action is irreversible.
+                </p>
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="showDeleteModal = false">Cancel</button>
+                    <button class="modal-btn primary"
+                            x-on:click="
+                                showDeleteModal = false;
+                                contextMenu = null;
+                                htmx.ajax('DELETE', deleteTargetUrl, { swap: 'none' });
+                            ">
+                        Confirm
                     </button>
                 </div>
             </div>
