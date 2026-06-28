@@ -1074,3 +1074,95 @@ button {
     gap: 10px;
     width: auto;
 }
+
+/* ── Dark Submenu Styles ─────────────────────────────────── */
+.dropdown-menu.dark-submenu {
+    background: #1c1c1b !important;
+    border-color: #3d3c3a !important;
+    color: #edecea !important;
+}
+.dropdown-menu.dark-submenu .dropdown-item {
+    color: #edecea !important;
+}
+.dropdown-menu.dark-submenu .dropdown-item:hover {
+    background: #333230 !important;
+}
+.dropdown-menu.dark-submenu .dropdown-divider {
+    background: #3d3c3a !important;
+}
+.dropdown-menu.dark-submenu .dropdown-icon {
+    color: #8a8784 !important;
+}
+
+/* ── Filter Modal Styles ─────────────────────────────────── */
+.filter-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+    gap: 8px;
+}
+
+.filter-tab-btn {
+    flex: 1;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 10px 4px;
+    color: var(--text-2);
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s;
+    text-align: center;
+    cursor: pointer;
+}
+
+.filter-tab-btn.active {
+    color: var(--text);
+    border-bottom-color: var(--text);
+    font-weight: 600;
+}
+
+.filter-options-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 240px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.filter-option-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.1s;
+    color: var(--text);
+    font-size: 13px;
+    text-align: left;
+    width: 100%;
+}
+
+.filter-option-item:hover {
+    background: var(--hover);
+}
+
+.filter-option-item.active {
+    background: var(--surface);
+    border-color: var(--text);
+    font-weight: 500;
+}
+
+.filter-active-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--text);
+    border-radius: 50%;
+    margin-right: 6px;
+    display: inline-block;
+}
+

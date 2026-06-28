@@ -37,10 +37,19 @@
                 renameName: '',
                 newFolderModal: false,
                 newFolderName: '',
+                sortBy: localStorage.getItem('sortBy') || 'name-asc',
+                dropdownPage: 'main',
+                filterModal: false,
+                filterTab: 'type',
+                filterType: 'all',
+                filterDate: 'all',
+                filterSize: 'all',
 
                 init() {
+                    window.__airnode = this;
                     this.currentPath = document.getElementById('init-path').dataset.path;
                     this.updateCount();
+                    this.$nextTick(() => this.sortFiles());
 
                     if (this.darkMode) {
                         document.documentElement.classList.add('dark');
@@ -51,6 +60,7 @@
                     document.addEventListener('click', () => {
                         this.contextMenu = null;
                         this.settingsOpen = null;
+                        this.dropdownPage = 'main';
                     });
                     document.addEventListener('touchmove', () => {
                         this.contextMenu = null;
@@ -110,9 +120,77 @@
                         });
                     } else {
                         this.query = '';
-                        document.querySelectorAll('.file-row').forEach(r => r.style.display = '');
-                        this.updateCount();
+                        this.applyFilters();
                     }
+                },
+
+                applyFilters() {
+                    const q = this.query.trim().toLowerCase();
+                    const type = this.filterType;
+                    const date = this.filterDate;
+                    const size = this.filterSize;
+                    const now = Date.now() / 1000;
+                    const oneDay = 24 * 60 * 60;
+                    const oneWeek = 7 * oneDay;
+                    const oneMonth = 30 * oneDay;
+
+                    document.querySelectorAll('.file-row').forEach(row => {
+                        const name = (row.dataset.name || '').toLowerCase();
+                        const rowType = row.dataset.type || '';
+                        const rowSize = parseInt(row.dataset.size || '0');
+                        const rowMtime = parseFloat(row.dataset.mtime || '0');
+                        const ext = (row.dataset.ext || '').toLowerCase();
+
+                        let show = name.includes(q);
+
+                        if (show && type !== 'all') {
+                            if (type === 'directory') show = rowType === 'directory';
+                            else if (type === 'file') show = rowType === 'file';
+                            else if (type === 'image') show = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
+                            else if (type === 'video') show = ['mp4', 'webm', 'mov'].includes(ext);
+                            else if (type === 'audio') show = ['mp3', 'ogg', 'wav', 'm4a', 'aac', 'flac'].includes(ext);
+                            else if (type === 'pdf') show = ext === 'pdf';
+                            else if (type === 'text') show = ['txt', 'md', 'py', 'js', 'ts', 'json', 'html', 'css', 'rs', 'c', 'cpp', 'go', 'java', 'sh'].includes(ext);
+                        }
+
+                        if (show && date !== 'all' && rowMtime > 0) {
+                            const age = now - rowMtime;
+                            if (date === 'today') show = age <= oneDay;
+                            else if (date === 'week') show = age <= oneWeek;
+                            else if (date === 'month') show = age <= oneMonth;
+                        }
+
+                        if (show && size !== 'all') {
+                            if (rowType === 'directory') {
+                                show = false;
+                            } else {
+                                if (size === 'small') show = rowSize < 10 * 1024 * 1024;
+                                else if (size === 'medium') show = rowSize >= 10 * 1024 * 1024 && rowSize <= 100 * 1024 * 1024;
+                                else if (size === 'large') show = rowSize > 100 * 1024 * 1024;
+                            }
+                        }
+
+                        row.style.display = show ? '' : 'none';
+                    });
+                    this.updateCount();
+                },
+
+                resetFilters() {
+                    this.filterType = 'all';
+                    this.filterDate = 'all';
+                    this.filterSize = 'all';
+                    this.applyFilters();
+                    if (window.lucide) {
+                        this.$nextTick(() => lucide.createIcons());
+                    }
+                },
+
+                activeFilterCount() {
+                    let count = 0;
+                    if (this.filterType !== 'all') count++;
+                    if (this.filterDate !== 'all') count++;
+                    if (this.filterSize !== 'all') count++;
+                    return count;
                 },
 
                 triggerUpload() {
@@ -202,6 +280,46 @@
                             }
                             this.newFolderModal = false;
                         });
+                },
+
+                sortFiles() {
+                    const list = document.querySelector('.file-list');
+                    if (!list) return;
+                    const items = Array.from(list.querySelectorAll('li.file-row'));
+                    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+                    items.sort((a, b) => {
+                        const typeA = a.dataset.type, typeB = b.dataset.type;
+                        // Directories always before files
+                        if (typeA !== typeB) return typeA === 'directory' ? -1 : 1;
+                        const nameA = a.dataset.name || '', nameB = b.dataset.name || '';
+                        switch (this.sortBy) {
+                            case 'name-desc': return collator.compare(nameB, nameA);
+                            case 'size-asc':  return parseInt(a.dataset.size || '0') - parseInt(b.dataset.size || '0');
+                            case 'size-desc': return parseInt(b.dataset.size || '0') - parseInt(a.dataset.size || '0');
+                            case 'date-desc': return parseFloat(b.dataset.mtime || '0') - parseFloat(a.dataset.mtime || '0');
+                            case 'date-asc':  return parseFloat(a.dataset.mtime || '0') - parseFloat(b.dataset.mtime || '0');
+                            case 'type-asc': {
+                                const extA = a.dataset.ext || '', extB = b.dataset.ext || '';
+                                if (extA !== extB) return collator.compare(extA, extB);
+                                return collator.compare(nameA, nameB);
+                            }
+                            case 'type-desc': {
+                                const extA = a.dataset.ext || '', extB = b.dataset.ext || '';
+                                if (extA !== extB) return collator.compare(extB, extA);
+                                return collator.compare(nameB, nameA);
+                            }
+                            default:          return collator.compare(nameA, nameB); // name-asc
+                        }
+                    });
+                    items.forEach(el => list.appendChild(el));
+                },
+
+                setSort(key) {
+                    this.sortBy = key;
+                    localStorage.setItem('sortBy', key);
+                    this.sortFiles();
+                    this.settingsOpen = null;
+                    this.dropdownPage = 'main';
                 }
             }));
         });
@@ -250,7 +368,6 @@
                 <span style="color: var(--text-2); opacity: 0.6;">·</span>
                 <span x-text="`${fileCount} file${fileCount === 1 ? '' : 's'}`"></span>
             </span>
-            <span class="status-path" x-text="currentPath"></span>
         </footer>
 
         <div class="modal-overlay" 
@@ -385,6 +502,128 @@
             </div>
         </div>
 
+        <!-- Filter Modal -->
+        <div class="modal-overlay"
+             x-show="filterModal"
+             x-on:keydown.escape.window="filterModal = false"
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" style="max-width: 440px;" x-on:click.outside="filterModal = false">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text); margin-bottom: 12px;">
+                    <i data-lucide="filter" style="stroke: var(--text-2); width:20px; height:20px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">Filter Options</h4>
+                </div>
+
+                <!-- Tabs header -->
+                <div class="filter-tabs">
+                    <button class="filter-tab-btn" :class="{ 'active': filterTab === 'type' }" x-on:click="filterTab = 'type'">
+                        <span style="display:inline-flex; align-items:center; gap:6px;">
+                            <span class="filter-active-dot" x-show="filterType !== 'all'"></span>
+                            File Type
+                        </span>
+                    </button>
+                    <button class="filter-tab-btn" :class="{ 'active': filterTab === 'date' }" x-on:click="filterTab = 'date'">
+                        <span style="display:inline-flex; align-items:center; gap:6px;">
+                            <span class="filter-active-dot" x-show="filterDate !== 'all'"></span>
+                            Date Modified
+                        </span>
+                    </button>
+                    <button class="filter-tab-btn" :class="{ 'active': filterTab === 'size' }" x-on:click="filterTab = 'size'">
+                        <span style="display:inline-flex; align-items:center; gap:6px;">
+                            <span class="filter-active-dot" x-show="filterSize !== 'all'"></span>
+                            Size Range
+                        </span>
+                    </button>
+                </div>
+
+                <!-- Tab: Type -->
+                <div x-show="filterTab === 'type'" class="filter-options-group">
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'all' }" x-on:click="filterType = 'all'; applyFilters();">
+                        <span>All Types</span>
+                        <i data-lucide="check" x-show="filterType === 'all'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'directory' }" x-on:click="filterType = 'directory'; applyFilters();">
+                        <span>Folders Only</span>
+                        <i data-lucide="check" x-show="filterType === 'directory'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'file' }" x-on:click="filterType = 'file'; applyFilters();">
+                        <span>Files Only</span>
+                        <i data-lucide="check" x-show="filterType === 'file'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'image' }" x-on:click="filterType = 'image'; applyFilters();">
+                        <span>Images</span>
+                        <i data-lucide="check" x-show="filterType === 'image'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'video' }" x-on:click="filterType = 'video'; applyFilters();">
+                        <span>Videos</span>
+                        <i data-lucide="check" x-show="filterType === 'video'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'audio' }" x-on:click="filterType = 'audio'; applyFilters();">
+                        <span>Audio</span>
+                        <i data-lucide="check" x-show="filterType === 'audio'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'pdf' }" x-on:click="filterType = 'pdf'; applyFilters();">
+                        <span>PDF Documents</span>
+                        <i data-lucide="check" x-show="filterType === 'pdf'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterType === 'text' }" x-on:click="filterType = 'text'; applyFilters();">
+                        <span>Text & Code Files</span>
+                        <i data-lucide="check" x-show="filterType === 'text'" style="width:14px;height:14px;"></i>
+                    </button>
+                </div>
+
+                <!-- Tab: Date -->
+                <div x-show="filterTab === 'date'" class="filter-options-group">
+                    <button class="filter-option-item" :class="{ 'active': filterDate === 'all' }" x-on:click="filterDate = 'all'; applyFilters();">
+                        <span>Anytime</span>
+                        <i data-lucide="check" x-show="filterDate === 'all'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterDate === 'today' }" x-on:click="filterDate = 'today'; applyFilters();">
+                        <span>Past 24 Hours</span>
+                        <i data-lucide="check" x-show="filterDate === 'today'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterDate === 'week' }" x-on:click="filterDate = 'week'; applyFilters();">
+                        <span>Past Week</span>
+                        <i data-lucide="check" x-show="filterDate === 'week'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterDate === 'month' }" x-on:click="filterDate = 'month'; applyFilters();">
+                        <span>Past Month</span>
+                        <i data-lucide="check" x-show="filterDate === 'month'" style="width:14px;height:14px;"></i>
+                    </button>
+                </div>
+
+                <!-- Tab: Size -->
+                <div x-show="filterTab === 'size'" class="filter-options-group">
+                    <button class="filter-option-item" :class="{ 'active': filterSize === 'all' }" x-on:click="filterSize = 'all'; applyFilters();">
+                        <span>Any Size</span>
+                        <i data-lucide="check" x-show="filterSize === 'all'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterSize === 'small' }" x-on:click="filterSize = 'small'; applyFilters();">
+                        <span>Small (&lt; 10 MB)</span>
+                        <i data-lucide="check" x-show="filterSize === 'small'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterSize === 'medium' }" x-on:click="filterSize = 'medium'; applyFilters();">
+                        <span>Medium (10 MB - 100 MB)</span>
+                        <i data-lucide="check" x-show="filterSize === 'medium'" style="width:14px;height:14px;"></i>
+                    </button>
+                    <button class="filter-option-item" :class="{ 'active': filterSize === 'large' }" x-on:click="filterSize = 'large'; applyFilters();">
+                        <span>Large (&gt; 100 MB)</span>
+                        <i data-lucide="check" x-show="filterSize === 'large'" style="width:14px;height:14px;"></i>
+                    </button>
+                </div>
+
+                <div class="modal-actions" style="margin-top: 16px; align-items: center; justify-content: space-between;">
+                    <div style="font-size: 12px; color: var(--text-2);">
+                        <span x-text="activeFilterCount() === 0 ? 'No filters active' : `${activeFilterCount()} active filter${activeFilterCount() === 1 ? '' : 's'}`"></span>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="modal-btn" x-show="activeFilterCount() > 0" x-on:click="resetFilters()" style="color: var(--danger); border-color: var(--danger);">Reset</button>
+                        <button class="modal-btn primary" x-on:click="filterModal = false">Done</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="floating-controls" 
             x-data="{ uploading: false }" 
             style="display: flex; flex-direction: column; align-items: flex-end; gap: 12px; position: fixed; bottom: 64px; right: 24px; z-index: 1000;">
@@ -428,12 +667,7 @@
             <div class="search-container" :class="{ 'is-active': searchOpen }">
                 <input id="search-input" class="search-input-inline" type="text" placeholder="Filter files…"
                     autocomplete="off" autocorrect="off" spellcheck="false" x-model="query" x-show="searchOpen"
-                    x-on:input="
-                    document.querySelectorAll('.file-row').forEach(row => {
-                        row.style.display = row.dataset.name.toLowerCase().includes(query.toLowerCase()) ? '' : 'none';
-                    });
-                    updateCount();
-                    " x-on:keydown.escape="toggleSearch()" />
+                    x-on:input="applyFilters()" x-on:keydown.escape="toggleSearch()" />
 
                 <button class="search-trigger" x-on:click.stop="toggleSearch()" aria-label="Toggle search">
                     <span x-show="!searchOpen" style="display:flex;"><i data-lucide="search" style="width:18px;height:18px;"></i></span>
@@ -492,31 +726,102 @@
             </div>
         </div>
 
-        <div class="dropdown-menu" x-show="settingsOpen !== null" x-on:click.outside="settingsOpen = null"
+        <div class="dropdown-menu" x-show="settingsOpen !== null" x-on:click.outside="settingsOpen = null; dropdownPage = 'main';"
             x-bind:style="settingsOpen ? `top: ${settingsOpen.y}px; left: ${settingsOpen.x}px;` : ''"
+            x-bind:class="dropdownPage === 'sort' ? 'dropdown-menu dark-submenu' : 'dropdown-menu'"
             style="display:none">
 
-            <button class="dropdown-item" x-on:click="openNewFolder(); settingsOpen = null;">
-                <span class="dropdown-icon"><i data-lucide="folder-plus" style="width:14px;height:14px;"></i></span>
-                <span>New Folder</span>
-            </button>
+            <!-- Main Page -->
+            <div x-show="dropdownPage === 'main'">
+                <button class="dropdown-item" x-on:click="openNewFolder(); settingsOpen = null;">
+                    <span class="dropdown-icon"><i data-lucide="folder-plus" style="width:14px;height:14px;"></i></span>
+                    <span>New Folder</span>
+                </button>
 
-            <div class="dropdown-divider"></div>
+                <div class="dropdown-divider"></div>
 
-            <button class="dropdown-item" x-on:click="toggleDarkMode()">
-                <span class="dropdown-icon">
-                    <i data-lucide="moon" x-show="!darkMode" style="width:14px;height:14px;"></i>
-                    <i data-lucide="sun" x-show="darkMode" style="width:14px;height:14px;"></i>
-                </span>
-                <span style="flex:1" x-text="darkMode ? 'Light Theme' : 'Dark Theme'"></span>
-            </button>
+                <button class="dropdown-item" x-on:click.stop="dropdownPage = 'sort'; $nextTick(() => { if(window.lucide) lucide.createIcons(); });">
+                    <span class="dropdown-icon"><i data-lucide="arrow-up-down" style="width:14px;height:14px;"></i></span>
+                    <span>Sort By</span>
+                    <i data-lucide="chevron-right" style="width:14px;height:14px;margin-left:auto;opacity:0.6;"></i>
+                </button>
 
-            <div class="dropdown-divider"></div>
+                <div class="dropdown-divider"></div>
 
-            <button class="dropdown-item" x-on:click="settingsOpen = null">
-                <span class="dropdown-icon"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i></span>
-                <span>Refresh Index</span>
-            </button>
+                <button class="dropdown-item" x-on:click="filterModal = true; settingsOpen = null; filterTab = 'type'; $nextTick(() => { if(window.lucide) lucide.createIcons(); });">
+                    <span class="dropdown-icon"><i data-lucide="filter" style="width:14px;height:14px;"></i></span>
+                    <span>Filter Items</span>
+                    <span x-show="activeFilterCount() > 0" class="filter-active-dot" style="margin-left:auto; margin-right:0;"></span>
+                </button>
+
+                <div class="dropdown-divider"></div>
+
+                <button class="dropdown-item" x-on:click="toggleDarkMode()">
+                    <span class="dropdown-icon">
+                        <i data-lucide="moon" x-show="!darkMode" style="width:14px;height:14px;"></i>
+                        <i data-lucide="sun" x-show="darkMode" style="width:14px;height:14px;"></i>
+                    </span>
+                    <span style="flex:1" x-text="darkMode ? 'Light Theme' : 'Dark Theme'"></span>
+                </button>
+
+                <div class="dropdown-divider"></div>
+
+                <button class="dropdown-item" x-on:click="settingsOpen = null">
+                    <span class="dropdown-icon"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i></span>
+                    <span>Refresh Index</span>
+                </button>
+            </div>
+
+            <!-- Sort Page -->
+            <div x-show="dropdownPage === 'sort'">
+                <button class="dropdown-item" style="font-weight: 600;" x-on:click.stop="dropdownPage = 'main'; $nextTick(() => { if(window.lucide) lucide.createIcons(); });">
+                    <span class="dropdown-icon"><i data-lucide="chevron-left" style="width:14px;height:14px;"></i></span>
+                    <span>Back</span>
+                </button>
+
+                <div class="dropdown-divider"></div>
+
+                <button class="dropdown-item" x-on:click="setSort('name-asc')">
+                    <span class="dropdown-icon"><i data-lucide="arrow-up-a-z" style="width:14px;height:14px;"></i></span>
+                    <span>Name A → Z</span>
+                    <i data-lucide="check" x-show="sortBy === 'name-asc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('name-desc')">
+                    <span class="dropdown-icon"><i data-lucide="arrow-down-z-a" style="width:14px;height:14px;"></i></span>
+                    <span>Name Z → A</span>
+                    <i data-lucide="check" x-show="sortBy === 'name-desc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('size-asc')">
+                    <span class="dropdown-icon"><i data-lucide="arrow-up-narrow-wide" style="width:14px;height:14px;"></i></span>
+                    <span>Size Small → Large</span>
+                    <i data-lucide="check" x-show="sortBy === 'size-asc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('size-desc')">
+                    <span class="dropdown-icon"><i data-lucide="arrow-down-wide-narrow" style="width:14px;height:14px;"></i></span>
+                    <span>Size Large → Small</span>
+                    <i data-lucide="check" x-show="sortBy === 'size-desc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('date-desc')">
+                    <span class="dropdown-icon"><i data-lucide="calendar" style="width:14px;height:14px;"></i></span>
+                    <span>Date Newest First</span>
+                    <i data-lucide="check" x-show="sortBy === 'date-desc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('date-asc')">
+                    <span class="dropdown-icon"><i data-lucide="calendar" style="width:14px;height:14px;"></i></span>
+                    <span>Date Oldest First</span>
+                    <i data-lucide="check" x-show="sortBy === 'date-asc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('type-asc')">
+                    <span class="dropdown-icon"><i data-lucide="file-type-2" style="width:14px;height:14px;"></i></span>
+                    <span>Type A → Z</span>
+                    <i data-lucide="check" x-show="sortBy === 'type-asc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+                <button class="dropdown-item" x-on:click="setSort('type-desc')">
+                    <span class="dropdown-icon"><i data-lucide="file-type-2" style="width:14px;height:14px;"></i></span>
+                    <span>Type Z → A</span>
+                    <i data-lucide="check" x-show="sortBy === 'type-desc'" style="width:12px;height:12px;margin-left:auto;opacity:0.8;"></i>
+                </button>
+            </div>
         </div>
 
         <div class="modal-backdrop" x-show="sheet !== null" x-transition.opacity x-on:click.self="closeSheet()"
@@ -688,6 +993,8 @@
         document.addEventListener('htmx:afterSwap', () => {
             if (window.lucide) lucide.createIcons();
             snapBreadcrumbs();
+            window.__airnode?.sortFiles();
+            window.__airnode?.applyFilters();
         });
         document.addEventListener('DOMContentLoaded', () => {
             if (window.lucide) lucide.createIcons();

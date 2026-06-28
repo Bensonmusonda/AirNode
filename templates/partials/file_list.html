@@ -34,7 +34,7 @@
     {% if entries %}
     <ul class="file-list">
         {% for entry in entries %}
-        <li class="file-row" data-name="{{ entry.name }}">
+        <li class="file-row" data-name="{{ entry.name }}" data-type="{{ entry.type }}" data-size="{{ entry.size_bytes or 0 }}" data-mtime="{{ entry.mtime or 0.0 }}" data-ext="{{ entry.ext }}">
 
             {% if entry.type == "directory" %}
             <button class="row-btn" hx-get="/browse?path={{ entry.path | urlencode }}" hx-target="#file-list-region"

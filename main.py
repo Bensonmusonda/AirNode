@@ -133,11 +133,14 @@ def scan_directory(target: Path) -> list[dict]:
     entries = []
     for is_file, entry in typed:
         size = None
-        if is_file:
-            try:
-                size = entry.stat().st_size
-            except (PermissionError, OSError):
-                pass
+        mtime = 0.0
+        try:
+            stat_res = entry.stat()
+            mtime = stat_res.st_mtime
+            if is_file:
+                size = stat_res.st_size
+        except (PermissionError, OSError):
+            pass
 
         name = entry.name
         ext = name.rsplit(".", 1)[-1].lower() if ("." in name and is_file) else ""
@@ -150,6 +153,7 @@ def scan_directory(target: Path) -> list[dict]:
             "path": entry.path.replace("\\", "/"),
             "ext": ext,
             "viewable": ext in VIEWABLE_EXTENSIONS,
+            "mtime": mtime,
         })
     return entries
 
@@ -167,7 +171,7 @@ async def index(request: Request):
     """Renders the main layout and root drive/directory listing."""
     if sys.platform == "win32":
         entries = [
-            {"name": str(r), "type": "directory", "size_display": "", "path": str(r).replace("\\", "/"), "ext": "", "viewable": False}
+            {"name": str(r), "type": "directory", "size_display": "", "path": str(r).replace("\\", "/"), "ext": "", "viewable": False, "mtime": 0.0}
             for r in ROOTS
         ]
         current_path, breadcrumbs = "/", []
@@ -196,7 +200,7 @@ async def browse(request: Request, path: str = ""):
 
     if target is None:
         entries = [
-            {"name": str(r), "type": "directory", "size_display": "", "path": str(r).replace("\\", "/"), "ext": "", "viewable": False}
+            {"name": str(r), "type": "directory", "size_display": "", "path": str(r).replace("\\", "/"), "ext": "", "viewable": False, "mtime": 0.0}
             for r in ROOTS
         ]
         ctx = {"entries": entries, "current_path": "/", "breadcrumbs": [], "platform": sys.platform}
