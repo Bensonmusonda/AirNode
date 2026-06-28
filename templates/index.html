@@ -44,6 +44,8 @@
                 filterType: 'all',
                 filterDate: 'all',
                 filterSize: 'all',
+                selectMode: false,
+                selectedItems: [],
 
                 init() {
                     window.__airnode = this;
@@ -216,6 +218,38 @@
                     }));
                 },
 
+                toggleSelectMode() {
+                    this.selectMode = !this.selectMode;
+                    this.selectedItems = [];
+                    this.settingsOpen = null;
+                },
+
+                downloadSelected() {
+                    if (this.selectedItems.length === 0) return;
+                    const pathsStr = JSON.stringify(this.selectedItems);
+                    window.location.href = `/download-batch?paths=${encodeURIComponent(pathsStr)}`;
+                },
+
+                deleteSelected() {
+                    if (this.selectedItems.length === 0) return;
+                    if (!confirm(`Are you sure you want to delete the ${this.selectedItems.length} selected items?`)) return;
+                    
+                    const fd = new FormData();
+                    fd.append('paths', JSON.stringify(this.selectedItems));
+                    
+                    fetch('/delete-batch', { method: 'POST', body: fd })
+                        .then(async r => {
+                            if (r.ok) {
+                                this.selectedItems = [];
+                                this.selectMode = false;
+                                window.dispatchEvent(new CustomEvent('refresh-directory'));
+                            } else {
+                                const msg = await r.text();
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Failed to delete items', type: 'error' } }));
+                            }
+                        });
+                },
+
                 toggleDarkMode() {
                     this.darkMode = !this.darkMode;
                     localStorage.setItem('darkMode', this.darkMode);
@@ -320,6 +354,41 @@
                     this.sortFiles();
                     this.settingsOpen = null;
                     this.dropdownPage = 'main';
+                },
+
+                startLongPress(event, path) {
+                    // Don't interfere with normal taps on the row buttons
+                    this._longPressTimer = setTimeout(() => {
+                        // Vibrate on mobile for tactile feedback
+                        if (navigator.vibrate) navigator.vibrate(40);
+                        this.selectMode = true;
+                        this.selectedItems = [path];
+                        this.contextMenu = null;
+                    }, 500);
+                },
+
+                cancelLongPress() {
+                    clearTimeout(this._longPressTimer);
+                },
+
+                toggleSelectItem(path) {
+                    if (this.selectedItems.includes(path)) {
+                        this.selectedItems = this.selectedItems.filter(p => p !== path);
+                        if (this.selectedItems.length === 0) this.selectMode = false;
+                    } else {
+                        this.selectedItems.push(path);
+                    }
+                },
+
+                enterSelectMode(path) {
+                    this.selectMode = true;
+                    this.selectedItems = [path];
+                    this.contextMenu = null;
+                },
+
+                exitSelectMode() {
+                    this.selectMode = false;
+                    this.selectedItems = [];
                 }
             }));
         });
@@ -975,6 +1044,37 @@
         </div>
 
         <span id="init-path" data-path="{{ current_path }}" style="display:none"></span>
+        <div class="batch-action-bar"
+            x-show="selectMode"
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="opacity-0 translate-y-4"
+            x-transition:enter-end="opacity-100 translate-y-0"
+            x-transition:leave="transition ease-in duration-150"
+            x-transition:leave-start="opacity-100 translate-y-0"
+            x-transition:leave-end="opacity-0 translate-y-4"
+            style="display:none">
+
+            <!-- Cancel -->
+            <button class="batch-btn batch-btn-cancel" x-on:click="exitSelectMode()" aria-label="Cancel">
+                <i data-lucide="x" style="width:15px;height:15px;"></i>
+            </button>
+
+            <!-- Count -->
+            <span class="batch-count" x-text="`${selectedItems.length} selected`"></span>
+
+            <!-- Divider -->
+            <div class="batch-divider"></div>
+
+            <!-- Download -->
+            <button class="batch-btn" x-on:click="downloadSelected()" :disabled="selectedItems.length === 0" aria-label="Download">
+                <i data-lucide="download" style="width:15px;height:15px;"></i>
+            </button>
+
+            <!-- Delete -->
+            <button class="batch-btn batch-btn-danger" x-on:click="deleteSelected()" :disabled="selectedItems.length === 0" aria-label="Delete">
+                <i data-lucide="trash-2" style="width:15px;height:15px;"></i>
+            </button>
+        </div>
     </div>
 
     <script>

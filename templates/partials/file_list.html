@@ -12,11 +12,12 @@
             {% if breadcrumbs %}<span class="crumb-sep">/</span>{% endif %}
         </span>
         {% for crumb in breadcrumbs %}
+        {% set safe_crumb_path = crumb.path | replace("'", "\\'") %}
         {% if not loop.last %}
         <span class="crumb">
             <button hx-get="/browse?path={{ crumb.path | urlencode }}" hx-target="#file-list-region" hx-swap="innerHTML"
                 hx-push-url="/browse?path={{ crumb.path | urlencode }}"
-                x-on:click="currentPath = '{{ crumb.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = '');">{{ crumb.label }}</button>
+                x-on:click="currentPath = '{{ safe_crumb_path }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = '');">{{ crumb.label }}</button>
             <span class="crumb-sep">/</span>
         </span>
         {% else %}
@@ -34,45 +35,66 @@
     {% if entries %}
     <ul class="file-list">
         {% for entry in entries %}
-        <li class="file-row" data-name="{{ entry.name }}" data-type="{{ entry.type }}" data-size="{{ entry.size_bytes or 0 }}" data-mtime="{{ entry.mtime or 0.0 }}" data-ext="{{ entry.ext }}">
+        {% set safe_path = entry.path | replace("'", "\\'") %}
+        {% set safe_name = entry.name | replace("\\", "\\\\") | replace("'", "\\'") %}
+        {% set is_viewable = 'true' if entry.viewable else 'false' %}
+        <li class="file-row"
+            :class="(selectMode ? 'select-active' : '') + (selectedItems.includes('{{ safe_path }}') ? ' selected' : '')"
+            @pointerdown="startLongPress($event, '{{ safe_path }}')"
+            @pointerup="cancelLongPress()"
+            @pointermove="cancelLongPress()"
+            @pointercancel="cancelLongPress()"
+            @contextmenu.prevent
+            data-name="{{ entry.name }}"
+            data-type="{{ entry.type }}"
+            data-size="{{ entry.size_bytes or 0 }}"
+            data-mtime="{{ entry.mtime or 0.0 }}"
+            data-ext="{{ entry.ext }}">
+
+            <input type="checkbox"
+                :checked="selectedItems.includes('{{ safe_path }}')"
+                @click.stop="toggleSelectItem('{{ safe_path }}')">
 
             {% if entry.type == "directory" %}
             <button class="row-btn" hx-get="/browse?path={{ entry.path | urlencode }}" hx-target="#file-list-region"
                 hx-swap="innerHTML" hx-push-url="/browse?path={{ entry.path | urlencode }}"
-                x-on:click="currentPath = '{{ entry.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = ''); $nextTick(() => updateCount())">
+                x-on:click="if(!selectMode){ currentPath = '{{ safe_path }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = ''); $nextTick(() => updateCount()) } else { toggleSelectItem('{{ safe_path }}') }">
                 <span class="row-icon is-dir">
                     <i data-lucide="folder" fill="currentColor" style="width:16px;height:16px;"></i>
                 </span>
                 <span class="row-name is-dir">{{ entry.name }}</span>
                 <span class="row-meta"></span>
             </button>
-            <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
-            name: '{{ entry.name | replace("\\", "\\\\") | replace("'", "\\'") }}',
-            path: '{{ entry.path | replace("'", "\\'") }}',
-            size: '—',
-            ext: '',
-            viewable: false,
-            isDir: true
-        })">
+            <button class="row-menu-btn" x-show="!selectMode" x-on:click.stop="openContextMenu($event, {
+                name: '{{ safe_name }}',
+                path: '{{ safe_path }}',
+                size: '—',
+                ext: '',
+                viewable: false,
+                isDir: true
+            })">
                 <i data-lucide="more-horizontal" style="width:16px;height:16px;"></i>
             </button>
 
             {% else %}
-            {% set is_viewable = 'true' if entry.viewable else 'false' %}
             <button class="row-btn" x-on:click="
-            const file = {
-                name: '{{ entry.name | replace("\\", "\\\\") | replace("'", "\\'") }}',
-                path: '{{ entry.path | replace("'", "\\'") }}',
-                size: '{{ entry.size_display }}',
-                ext:  '{{ entry.ext }}',
-                viewable: {{ is_viewable }}
-            };
-            if (file.viewable) {
-                openViewer(file);
-            } else {
-                openModal(file);
-            }
-        ">
+                if (selectMode) {
+                    toggleSelectItem('{{ safe_path }}');
+                } else {
+                    const file = {
+                        name: '{{ safe_name }}',
+                        path: '{{ safe_path }}',
+                        size: '{{ entry.size_display }}',
+                        ext:  '{{ entry.ext }}',
+                        viewable: {{ is_viewable }}
+                    };
+                    if (file.viewable) {
+                        openViewer(file);
+                    } else {
+                        openModal(file);
+                    }
+                }
+            ">
                 <span class="row-icon">
                     {% set ext = entry.ext %}
                     {% if ext in ['mp4', 'mkv', 'avi', 'mov', 'webm'] %}
@@ -94,14 +116,14 @@
                 <span class="row-name is-file">{{ entry.name }}</span>
                 <span class="row-meta">{{ entry.size_display }}</span>
             </button>
-            <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
-            name: '{{ entry.name | replace("\\", "\\\\") | replace("'", "\\'") }}',
-            path: '{{ entry.path | replace("'", "\\'") }}',
-            size: '{{ entry.size_display }}',
-            ext:  '{{ entry.ext }}',
-            viewable: {{ is_viewable }},
-            isDir: false
-        })">
+            <button class="row-menu-btn" x-show="!selectMode" x-on:click.stop="openContextMenu($event, {
+                name: '{{ safe_name }}',
+                path: '{{ safe_path }}',
+                size: '{{ entry.size_display }}',
+                ext:  '{{ entry.ext }}',
+                viewable: {{ is_viewable }},
+                isDir: false
+            })">
                 <i data-lucide="more-horizontal" style="width:16px;height:16px;"></i>
             </button>
             {% endif %}

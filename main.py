@@ -7,6 +7,8 @@ import ctypes
 import mimetypes
 import json
 import traceback
+import zipfile
+import io
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
@@ -239,7 +241,7 @@ def download(path: str):
     )
 
 @app.post("/delete")
-def delete_item(request: Request, path: str):
+def delete_item(request: Request, path: str = Form(...)):
     """Deletes a file or directory securely if it passes validation."""
     target = resolve_target(path)
     if target is None or not is_path_allowed(target):
@@ -269,6 +271,60 @@ def delete_item(request: Request, path: str):
         print(f"\n[AirNode Deletion Error]: {str(e)}")
         traceback.print_exc()
         return Response(status_code=500, content=f"Failed to delete {item_type.lower()}: {str(e)}")
+
+# --- Batch Delete Endpoint ---
+@app.post("/delete-batch")
+async def delete_batch(paths: str = Form(...)):
+    """Deletes multiple files/folders."""
+    try:
+        path_list = json.loads(paths)
+        for p in path_list:
+            target = resolve_target(p)
+            # Ensure path is valid and within roots
+            if target and is_path_allowed(target) and target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+        return Response(
+            status_code=200,
+            headers={
+                "HX-Trigger": json.dumps({
+                    "show-toast": {"message": "Items deleted successfully", "type": "success"}
+                })
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Batch Download Endpoint ---
+@app.get("/download-batch")
+async def download_batch(paths: str):
+    try:
+        path_list = json.loads(paths)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid paths parameter.")
+    
+    # In-memory ZIP buffer
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for p in path_list:
+            target = resolve_target(p)
+            if target and is_path_allowed(target) and target.exists():
+                if target.is_dir():
+                    for root, _, files in os.walk(target):
+                        for file in files:
+                            file_path = Path(root) / file
+                            zip_file.write(file_path, file_path.relative_to(target.parent))
+                else:
+                    zip_file.write(target, target.name)
+    
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="archive.zip"'}
+    )
 
 @app.post("/upload", response_class=HTMLResponse)
 async def upload_file(
