@@ -52,6 +52,9 @@
                         this.contextMenu = null;
                         this.settingsOpen = null;
                     });
+                    document.addEventListener('touchmove', () => {
+                        this.contextMenu = null;
+                    }, { passive: true });
                 },
 
                 updateCount() {
@@ -422,10 +425,6 @@
                 <i data-lucide="upload" style="width:18px;height:18px;"></i>
             </button>
 
-            <button id="fab-new-folder" class="fab-btn" x-on:click="openNewFolder()" aria-label="New Folder">
-                <i data-lucide="folder-plus" style="width:18px;height:18px;"></i>
-            </button>
-
             <div class="search-container" :class="{ 'is-active': searchOpen }">
                 <input id="search-input" class="search-input-inline" type="text" placeholder="Filter files…"
                     autocomplete="off" autocorrect="off" spellcheck="false" x-model="query" x-show="searchOpen"
@@ -478,6 +477,11 @@
                                     style="width:16px;height:16px;"></i></span>
                             <span>Upload File Here</span>
                         </button>
+                        <button class="menu-item-btn" x-on:click="openNewFolder(); menuOpen = false;">
+                            <span class="menu-item-icon"><i data-lucide="folder-plus"
+                                    style="width:16px;height:16px;"></i></span>
+                            <span>New Folder</span>
+                        </button>
                         <button class="menu-item-btn" x-on:click="settingsOpen = true; menuOpen = false;">
                             <span class="menu-item-icon"><i data-lucide="settings"
                                     style="width:16px;height:16px;"></i></span>
@@ -491,6 +495,13 @@
         <div class="dropdown-menu" x-show="settingsOpen !== null" x-on:click.outside="settingsOpen = null"
             x-bind:style="settingsOpen ? `top: ${settingsOpen.y}px; left: ${settingsOpen.x}px;` : ''"
             style="display:none">
+
+            <button class="dropdown-item" x-on:click="openNewFolder(); settingsOpen = null;">
+                <span class="dropdown-icon"><i data-lucide="folder-plus" style="width:14px;height:14px;"></i></span>
+                <span>New Folder</span>
+            </button>
+
+            <div class="dropdown-divider"></div>
 
             <button class="dropdown-item" x-on:click="toggleDarkMode()">
                 <span class="dropdown-icon">
@@ -662,11 +673,25 @@
     </div>
 
     <script>
+        function snapBreadcrumbs() {
+            const crumbs = document.querySelector('.breadcrumbs');
+            if (!crumbs) return;
+            const current = crumbs.querySelector('.crumb-current');
+            if (current) {
+                // Peek ~48px before the current directory so user sees it's scrollable
+                crumbs.scrollLeft = current.offsetLeft - 48;
+            } else {
+                crumbs.scrollLeft = 0;
+            }
+        }
+
         document.addEventListener('htmx:afterSwap', () => {
             if (window.lucide) lucide.createIcons();
+            snapBreadcrumbs();
         });
         document.addEventListener('DOMContentLoaded', () => {
             if (window.lucide) lucide.createIcons();
+            snapBreadcrumbs();
         });
     </script>
 </body>

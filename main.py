@@ -86,7 +86,12 @@ def build_breadcrumbs(path_str: str) -> list[dict]:
     parts = [p for p in path_str.replace("\\", "/").split("/") if p]
     crumbs = []
     for i, part in enumerate(parts):
-        crumbs.append({"label": part, "path": "/".join(parts[:i + 1])})
+        path = "/".join(parts[:i + 1])
+        # Windows drive letters (e.g. "C:") need a trailing slash so
+        # resolve_target returns the drive root, not the current working directory.
+        if i == 0 and part.endswith(":"):
+            path += "/"
+        crumbs.append({"label": part, "path": path})
     return crumbs
 
 def resolve_target(path: str) -> Path | None:
