@@ -32,7 +32,11 @@
                 contextMenu: null,
 
                 menuOpen: false, 
-                propertiesData: null, 
+                propertiesData: null,
+                renameModal: null,
+                renameName: '',
+                newFolderModal: false,
+                newFolderName: '',
 
                 init() {
                     this.currentPath = document.getElementById('init-path').dataset.path;
@@ -139,6 +143,62 @@
                     } else {
                         document.documentElement.classList.remove('dark');
                     }
+                },
+
+                openRename(file) {
+                    this.renameName = file.name;
+                    this.renameModal = { ...file };
+                    this.contextMenu = null;
+                    this.sheet = null;
+                    this.$nextTick(() => {
+                        const el = document.getElementById('rename-input');
+                        if (el) { el.focus(); el.select(); }
+                    });
+                },
+
+                submitRename() {
+                    const trimmed = this.renameName.trim();
+                    if (!trimmed || !this.renameModal) return;
+                    const fd = new FormData();
+                    fd.append('path', this.renameModal.path);
+                    fd.append('new_name', trimmed);
+                    fetch('/rename', { method: 'POST', body: fd })
+                        .then(async r => {
+                            if (r.ok) {
+                                window.dispatchEvent(new CustomEvent('refresh-directory'));
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Renamed successfully', type: 'success' } }));
+                            } else {
+                                const msg = await r.text();
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Rename failed', type: 'error' } }));
+                            }
+                            this.renameModal = null;
+                        });
+                },
+
+                openNewFolder() {
+                    this.newFolderName = '';
+                    this.newFolderModal = true;
+                    this.contextMenu = null;
+                    this.$nextTick(() => document.getElementById('new-folder-input')?.focus());
+                },
+
+                submitNewFolder() {
+                    const trimmed = this.newFolderName.trim();
+                    if (!trimmed) return;
+                    const fd = new FormData();
+                    fd.append('current_path', this.currentPath);
+                    fd.append('folder_name', trimmed);
+                    fetch('/new-folder', { method: 'POST', body: fd })
+                        .then(async r => {
+                            if (r.ok) {
+                                window.dispatchEvent(new CustomEvent('refresh-directory'));
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Folder created successfully', type: 'success' } }));
+                            } else {
+                                const msg = await r.text();
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Failed to create folder', type: 'error' } }));
+                            }
+                            this.newFolderModal = false;
+                        });
                 }
             }));
         });
@@ -269,6 +329,59 @@
             </div>
         </div>
 
+        <!-- Rename Modal -->
+        <div class="modal-overlay"
+             x-show="renameModal !== null"
+             x-on:keydown.escape.window="renameModal = null"
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" x-on:click.outside="renameModal = null">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                    <i data-lucide="pencil" style="stroke: var(--text-2); width:20px; height:20px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">Rename</h4>
+                </div>
+                <p style="font-size: 13px; color: var(--text-2); margin: 0; line-height: 1.5;">
+                    Enter a new name for <strong style="color: var(--text);" x-text="renameModal?.name"></strong>
+                </p>
+                <input id="rename-input"
+                    type="text"
+                    x-model="renameName"
+                    x-on:keydown.enter="submitRename()"
+                    x-on:keydown.escape="renameModal = null"
+                    style="width:100%; box-sizing:border-box; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:14px; outline:none;"
+                    placeholder="New name…" />
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="renameModal = null">Cancel</button>
+                    <button class="modal-btn primary" x-on:click="submitRename()">Rename</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- New Folder Modal -->
+        <div class="modal-overlay"
+             x-show="newFolderModal"
+             x-on:keydown.escape.window="newFolderModal = false"
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" x-on:click.outside="newFolderModal = false">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                    <i data-lucide="folder-plus" style="stroke: var(--text-2); width:20px; height:20px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">New Folder</h4>
+                </div>
+                <input id="new-folder-input"
+                    type="text"
+                    x-model="newFolderName"
+                    x-on:keydown.enter="submitNewFolder()"
+                    x-on:keydown.escape="newFolderModal = false"
+                    style="width:100%; box-sizing:border-box; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:14px; outline:none;"
+                    placeholder="Folder name…" />
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="newFolderModal = false">Cancel</button>
+                    <button class="modal-btn primary" x-on:click="submitNewFolder()">Create</button>
+                </div>
+            </div>
+        </div>
+
         <div class="floating-controls" 
             x-data="{ uploading: false }" 
             style="display: flex; flex-direction: column; align-items: flex-end; gap: 12px; position: fixed; bottom: 64px; right: 24px; z-index: 1000;">
@@ -307,6 +420,10 @@
 
             <button id="fab-upload" class="fab-btn" x-on:click="document.getElementById('file-upload-input').click()" aria-label="Upload File">
                 <i data-lucide="upload" style="width:18px;height:18px;"></i>
+            </button>
+
+            <button id="fab-new-folder" class="fab-btn" x-on:click="openNewFolder()" aria-label="New Folder">
+                <i data-lucide="folder-plus" style="width:18px;height:18px;"></i>
             </button>
 
             <div class="search-container" :class="{ 'is-active': searchOpen }">
@@ -416,6 +533,11 @@
                         <span>Properties</span>
                     </button>
 
+                    <button class="sheet-btn" x-on:click="openRename(sheet)">
+                        <span class="sheet-btn-icon"><i data-lucide="pencil" style="width:16px;height:16px;"></i></span>
+                        <span>Rename</span>
+                    </button>
+
                     <button class="sheet-btn danger" x-on:click="deleteFile(sheet)">
                         <span class="sheet-btn-icon"><i data-lucide="trash-2"
                                 style="width:16px;height:16px;"></i></span>
@@ -445,6 +567,11 @@
             <button class="ctx-item" x-on:click="openProperties(contextMenu.file)">
                 <span class="ctx-icon"><i data-lucide="info" style="width:14px;height:14px;"></i></span>
                 Properties
+            </button>
+
+            <button class="ctx-item" x-on:click="openRename(contextMenu.file)">
+                <span class="ctx-icon"><i data-lucide="pencil" style="width:14px;height:14px;"></i></span>
+                Rename
             </button>
 
             <div class="ctx-divider"></div>
