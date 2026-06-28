@@ -1,14 +1,13 @@
-{# Out-of-band updates for the breadcrumbs navigation bar #}
+{# Out-of-band updates for the breadcrumbs navigation bar, only rendered during HTMX dynamic navigation #}
+{% if request.headers.get('hx-request') %}
 <div hx-swap-oob="innerHTML:#path-bar">
-    <span class="path-prompt">›</span>
     <div class="breadcrumbs">
-        <span class="crumb-root">/</span>
         {% for crumb in breadcrumbs %}
         {% if not loop.last %}
         <span class="crumb">
             <button hx-get="/browse?path={{ crumb.path | urlencode }}" hx-target="#file-list-region" hx-swap="innerHTML"
                 hx-push-url="/browse?path={{ crumb.path | urlencode }}"
-                x-on:click="currentPath = '{{ crumb.path }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = '');">{{
+                x-on:click="currentPath = '{{ crumb.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = '');">{{
                 crumb.label }}</button>
             <span class="crumb-sep">/</span>
         </span>
@@ -17,8 +16,8 @@
         {% endif %}
         {% endfor %}
     </div>
-    <span class="path-cursor"></span>
 </div>
+{% endif %}
 
 {# Directory and file entries listing #}
 {% if entries %}
@@ -29,35 +28,71 @@
         {% if entry.type == "directory" %}
         <button class="row-btn" hx-get="/browse?path={{ entry.path | urlencode }}" hx-target="#file-list-region"
             hx-swap="innerHTML" hx-push-url="/browse?path={{ entry.path | urlencode }}"
-            x-on:click="currentPath = '{{ entry.path }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = ''); $nextTick(() => updateCount())">
-            <span class="row-icon">📁</span>
+            x-on:click="currentPath = '{{ entry.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = ''); $nextTick(() => updateCount())">
+            <span class="row-icon is-dir">
+                <i data-lucide="folder" fill="currentColor" style="width:16px;height:16px;"></i>
+            </span>
             <span class="row-name is-dir">{{ entry.name }}</span>
             <span class="row-meta"></span>
-            <span class="row-chevron">›</span>
+        </button>
+        <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
+            name: '{{ entry.name | replace("'", "\\'") }}',
+            path: '{{ entry.path | replace("'", "\\'") }}',
+            size: '',
+            ext: '',
+            viewable: false,
+            isDir: true
+        })">
+            <i data-lucide="more-horizontal" style="width:16px;height:16px;"></i>
         </button>
 
         {% else %}
-        {# Clicking a file row displays the context menu / action sheet #}
-        <button class="row-btn" x-on:click="openModal({
-              name: '{{ entry.name | replace("'", "\\'") }}',
-              path: '{{ entry.path | replace("'", "\\'") }}',
-              size: '{{ entry.size_display }}',
-              ext:  '{{ entry.ext }}',
-              viewable: {{ 'true' if entry.viewable else 'false' }}
-            })">
+        {# Clicking a file row: open if viewable, show download modal if not #}
+        {% set is_viewable = 'true' if entry.viewable else 'false' %}
+        <button class="row-btn" x-on:click="
+            const file = {
+                name: '{{ entry.name | replace("'", "\\'") }}',
+                path: '{{ entry.path | replace("'", "\\'") }}',
+                size: '{{ entry.size_display }}',
+                ext:  '{{ entry.ext }}',
+                viewable: {{ is_viewable }}
+            };
+            if (file.viewable) {
+                openViewer(file);
+            } else {
+                openModal(file);
+            }
+        ">
             <span class="row-icon">
                 {% set ext = entry.ext %}
-                {% if ext in ['mp4', 'mkv', 'avi', 'mov', 'webm'] %}🎬
-                {% elif ext in ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a'] %}🎵
-                {% elif ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'heic'] %}🖼️
-                {% elif ext in ['pdf'] %}📄
-                {% elif ext in ['zip', 'tar', 'gz', 'rar', '7z'] %}🗜️
-                {% elif ext in ['py', 'js', 'ts', 'rs', 'c', 'cpp', 'go', 'java', 'sh', 'json', 'md', 'txt'] %}📝
-                {% else %}📄
+                {% if ext in ['mp4', 'mkv', 'avi', 'mov', 'webm'] %}
+                    <i data-lucide="film" style="width:16px;height:16px;"></i>
+                {% elif ext in ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a'] %}
+                    <i data-lucide="music" style="width:16px;height:16px;"></i>
+                {% elif ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'heic'] %}
+                    <i data-lucide="image" style="width:16px;height:16px;"></i>
+                {% elif ext in ['pdf'] %}
+                    <i data-lucide="file-text" style="width:16px;height:16px;"></i>
+                {% elif ext in ['zip', 'tar', 'gz', 'rar', '7z'] %}
+                    <i data-lucide="archive" style="width:16px;height:16px;"></i>
+                {% elif ext in ['py', 'js', 'ts', 'rs', 'c', 'cpp', 'go', 'java', 'sh', 'json', 'md', 'txt'] %}
+                    <i data-lucide="file-code" style="width:16px;height:16px;"></i>
+                {% else %}
+                    <i data-lucide="file" style="width:16px;height:16px;"></i>
                 {% endif %}
             </span>
             <span class="row-name is-file">{{ entry.name }}</span>
             <span class="row-meta">{{ entry.size_display }}</span>
+        </button>
+        <button class="row-menu-btn" x-on:click.stop="openContextMenu($event, {
+            name: '{{ entry.name | replace("'", "\\'") }}',
+            path: '{{ entry.path | replace("'", "\\'") }}',
+            size: '{{ entry.size_display }}',
+            ext:  '{{ entry.ext }}',
+            viewable: {{ is_viewable }},
+            isDir: false
+        })">
+            <i data-lucide="more-horizontal" style="width:16px;height:16px;"></i>
         </button>
         {% endif %}
 
@@ -67,7 +102,7 @@
 
 {% else %}
 <div class="empty-state">
-    <span class="empty-icon">◌</span>
+    <span class="empty-icon"><i data-lucide="folder-open" fill="currentColor" style="width:28px;height:28px;"></i></span>
     <span>Empty directory</span>
 </div>
 {% endif %}

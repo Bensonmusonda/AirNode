@@ -1,13 +1,18 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AirNode</title>
+    <meta name="description" content="AirNode – local network file explorer and media server." />
 
-    <!-- Local client-side dependencies -->
-    <link rel="stylesheet" href="/static/vendor/pico.min.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
+
     <script src="/static/vendor/htmx.min.js" defer></script>
     <script>
         document.addEventListener('alpine:init', () => {
@@ -17,10 +22,26 @@
                 currentPath: '',
                 sheet: null,
                 viewer: null,
+                searchOpen: false,
+                settingsOpen: false,
+                darkMode: localStorage.getItem('darkMode') === 'true',
+                contextMenu: null,   // { x, y, file }
 
                 init() {
                     this.currentPath = document.getElementById('init-path').dataset.path;
                     this.updateCount();
+
+                    // Apply dark mode on initialization
+                    if (this.darkMode) {
+                        document.documentElement.classList.add('dark');
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                    }
+
+                    // Close context menu on outside click
+                    document.addEventListener('click', () => {
+                        this.contextMenu = null;
+                    });
                 },
 
                 updateCount() {
@@ -46,10 +67,48 @@
                     else if (ext === 'pdf') kind = 'pdf';
                     this.viewer = { name: file.name, path: file.path, kind };
                     this.sheet = null;
+                    this.contextMenu = null;
                 },
 
                 closeViewer() {
                     this.viewer = null;
+                },
+
+                openContextMenu(event, file) {
+                    event.stopPropagation();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    this.contextMenu = {
+                        file,
+                        x: rect.left,
+                        y: rect.bottom + 4
+                    };
+                },
+
+                closeContextMenu() {
+                    this.contextMenu = null;
+                },
+
+                toggleSearch() {
+                    this.searchOpen = !this.searchOpen;
+                    if (this.searchOpen) {
+                        this.$nextTick(() => {
+                            document.getElementById('search-input')?.focus();
+                        });
+                    } else {
+                        this.query = '';
+                        document.querySelectorAll('.file-row').forEach(r => r.style.display = '');
+                        this.updateCount();
+                    }
+                },
+
+                toggleDarkMode() {
+                    this.darkMode = !this.darkMode;
+                    localStorage.setItem('darkMode', this.darkMode);
+                    if (this.darkMode) {
+                        document.documentElement.classList.add('dark');
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                    }
                 }
             }));
         });
@@ -60,34 +119,57 @@
     <style>
         /* ── Design Tokens ─────────────────────────────────────────── */
         :root {
-            --bg: #0D1117;
-            --surface: #161B22;
-            --border: #21262D;
-            --text: #E6EDF3;
-            --muted: #8B949E;
-            --accent: #00B4D8;
-            --accent-dim: #005F73;
-            --danger: #F85149;
-            --dir-color: #79C0FF;
-            --mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
-            --radius: 4px;
-            --row-h: 44px;
+            --bg: #f5f5f4;
+            --surface: #faf9f8;
+            /* Soft off-white to replace blinding pure white */
+            --surface-2: #f0efee;
+            --border: #e2e0de;
+            --border-deep: #ccc9c6;
+            --text: #3d3d3d;
+            --text-2: #575552;
+            --muted: #9c9894;
+            --hover: #edecea;
+            --active: #e5e3e1;
+            --danger: #c0392b;
+
+            --font: 'Inter', system-ui, -apple-system, sans-serif;
+            --radius-sm: 6px;
+            --radius: 10px;
+            --radius-lg: 16px;
+            --row-h: 48px;
+            --shadow: 0 1px 4px rgba(0, 0, 0, .06), 0 2px 12px rgba(0, 0, 0, .04);
+            --shadow-lg: 0 4px 24px rgba(0, 0, 0, .10), 0 1px 4px rgba(0, 0, 0, .06);
+        }
+
+        .dark {
+            /* Swapped grey shades: body (--bg) is now lighter, top/bottom bars (--surface) are darker */
+            --bg: #2b2a29;
+            --surface: #1c1c1b;
+            --surface-2: #383735;
+            --border: #3d3c3a;
+            --border-deep: #4f4d4a;
+            --text: #edecea;
+            --text-2: #ccc9c6;
+            --muted: #8a8784;
+            --hover: #333230;
+            --active: #454341;
         }
 
         *,
         *::before,
         *::after {
             box-sizing: border-box;
+            margin: 0;
+            padding: 0;
         }
 
         html,
         body {
             background: var(--bg);
             color: var(--text);
-            font-family: var(--mono);
-            font-size: 13px;
+            font-family: var(--font);
+            font-size: 14px;
             line-height: 1.5;
-            margin: 0;
             min-height: 100dvh;
         }
 
@@ -98,6 +180,7 @@
 
         button {
             cursor: pointer;
+            font-family: inherit;
         }
 
         /* ── Layout ────────────────────────────────────────────────── */
@@ -112,26 +195,27 @@
         .header {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 0 16px;
-            height: 48px;
+            gap: 16px;
+            padding: 0 20px;
+            height: 52px;
             background: var(--surface);
-            border-bottom: 1px solid var(--border);
+            /* Thin section border removed - color contrast handles separation */
             flex-shrink: 0;
         }
 
         .wordmark {
-            color: var(--accent);
-            font-size: 14px;
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
+            color: var(--text);
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            flex-shrink: 0;
         }
 
-        .header-sep {
-            color: var(--border);
-            font-size: 18px;
-            font-weight: 300;
+        .header-div {
+            width: 1px;
+            height: 18px;
+            background: var(--border-deep);
+            flex-shrink: 0;
         }
 
         /* ── Path Bar ──────────────────────────────────────────────── */
@@ -139,13 +223,9 @@
             flex: 1;
             display: flex;
             align-items: center;
+            gap: 2px;
             overflow: hidden;
-        }
-
-        .path-prompt {
-            color: var(--accent);
-            margin-right: 6px;
-            flex-shrink: 0;
+            min-width: 0;
         }
 
         .breadcrumbs {
@@ -153,11 +233,13 @@
             align-items: center;
             overflow: hidden;
             white-space: nowrap;
+            gap: 2px;
         }
 
         .crumb-root {
             color: var(--muted);
             font-size: 13px;
+            padding: 2px 4px;
         }
 
         .crumb {
@@ -170,84 +252,259 @@
         .crumb button {
             background: none;
             border: none;
-            padding: 2px 4px;
-            color: var(--text);
-            font-family: var(--mono);
+            padding: 3px 5px;
+            color: var(--text-2);
             font-size: 13px;
-            border-radius: var(--radius);
-            transition: color 0.1s, background 0.1s;
+            border-radius: var(--radius-sm);
+            transition: background 0.12s;
         }
 
         .crumb button:hover {
-            color: var(--accent);
-            background: color-mix(in srgb, var(--accent) 10%, transparent);
+            background: var(--hover);
+            color: var(--text);
         }
 
         .crumb-sep {
-            color: var(--border);
-            margin: 0 1px;
-            font-size: 16px;
+            color: var(--border-deep);
+            font-size: 14px;
+            padding: 0 1px;
+            user-select: none;
         }
 
         .crumb-current {
             color: var(--text);
             font-size: 13px;
-            padding: 2px 4px;
+            font-weight: 500;
+            padding: 3px 5px;
             overflow: hidden;
             text-overflow: ellipsis;
         }
 
-        .path-cursor {
-            display: inline-block;
-            width: 7px;
-            height: 13px;
-            background: var(--accent);
-            margin-left: 3px;
-            vertical-align: middle;
-            border-radius: 1px;
-            animation: blink 1.1s step-end infinite;
+        /* ── Floating Controls Container ───────────────────────────── */
+        .floating-controls {
+            position: fixed;
+            bottom: 56px;
+            right: 24px;
+            left: 24px;
+            /* Added left alignment to allow full expansion space */
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 12px;
+            z-index: 60;
+            pointer-events: none;
+            /* Allows clicks to pass through empty regions of the container */
+        }
+
+        .floating-controls>* {
+            pointer-events: auto;
+            /* Restores click tracking for actual buttons */
+        }
+
+        .fab-btn {
+            width: 44px;
+            height: 44px;
+            border-radius: var(--radius);
+            background: var(--text);
+            color: var(--surface);
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--shadow-lg);
+            transition: background 0.15s, transform 0.15s, color 0.15s;
+            cursor: pointer;
             flex-shrink: 0;
         }
 
-        @keyframes blink {
-
-            0%,
-            100% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0;
-            }
+        .fab-btn:hover {
+            background: var(--text-2);
+            transform: scale(1.04);
         }
 
-        /* ── Search ────────────────────────────────────────────────── */
-        .search-wrap {
-            padding: 10px 16px;
+        /* ── Inline Expandable Search ──────────────────────────────── */
+        .search-container {
+            display: flex;
+            align-items: center;
             background: var(--surface);
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-        }
-
-        .search-input {
-            width: 100%;
-            background: var(--bg);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            color: var(--text);
-            font-family: var(--mono);
-            font-size: 13px;
-            padding: 8px 12px;
-            outline: none;
-            transition: border-color 0.15s;
+            box-shadow: var(--shadow-lg);
+            height: 44px;
+            width: 44px;
+            /* Collapsed width */
+            overflow: hidden;
+            transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.15s;
         }
 
-        .search-input::placeholder {
+        .search-container.is-active {
+            width: 100%;
+            /* Spans full screen width bounded by parent controls margin wrapper */
+            border-color: var(--text-2);
+        }
+
+        .search-input-inline {
+            flex: 1;
+            height: 100%;
+            background: transparent;
+            border: none;
+            padding: 0 14px;
+            color: var(--text);
+            font-family: var(--font);
+            font-size: 14px;
+            outline: none;
+            min-width: 0;
+        }
+
+        .search-input-inline::placeholder {
             color: var(--muted);
         }
 
-        .search-input:focus {
-            border-color: var(--accent);
+        .search-trigger {
+            width: 42px;
+            height: 42px;
+            border-radius: calc(var(--radius) - 1px);
+            background: var(--text);
+            color: var(--surface);
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s, transform 0.15s;
+            flex-shrink: 0;
+            cursor: pointer;
+        }
+
+        .search-trigger:hover {
+            background: var(--text-2);
+        }
+
+        .search-container.is-active .search-trigger {
+            background: transparent;
+            color: var(--text);
+        }
+
+        .search-container.is-active .search-trigger:hover {
+            background: var(--hover);
+        }
+
+        /* ── Settings Panel Slide-Over ─────────────────────────────── */
+        .settings-panel {
+            position: fixed;
+            inset: 0 0 0 auto;
+            width: min(400px, 100vw);
+            background: var(--surface);
+            border-left: 1px solid var(--border);
+            z-index: 150;
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .settings-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 0 16px;
+            height: 52px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .settings-close {
+            background: none;
+            border: none;
+            color: var(--text);
+            display: flex;
+            padding: 6px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+        }
+
+        .settings-close:hover {
+            background: var(--hover);
+        }
+
+        .settings-title {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .settings-body {
+            padding: 24px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .settings-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .settings-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+        }
+
+        .settings-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 16px;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+
+        .settings-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .settings-item-title {
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .settings-item-desc {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        /* Toggle Switch */
+        .toggle-switch {
+            width: 44px;
+            height: 24px;
+            background: var(--border-deep);
+            border: none;
+            border-radius: 12px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .toggle-switch.is-on {
+            background: var(--text);
+        }
+
+        .toggle-knob {
+            width: 20px;
+            height: 20px;
+            background: var(--surface);
+            border-radius: 50%;
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.2s;
+        }
+
+        .toggle-switch.is-on .toggle-knob {
+            transform: translateX(20px);
         }
 
         /* ── File List ─────────────────────────────────────────────── */
@@ -266,82 +523,221 @@
         }
 
         .list-wrap::-webkit-scrollbar-thumb {
-            background: var(--border);
+            background: var(--border-deep);
             border-radius: 2px;
         }
 
         .file-list {
             list-style: none;
-            margin: 0;
-            padding: 0;
         }
 
         .file-row {
             display: flex;
             align-items: center;
             min-height: var(--row-h);
-            padding: 0 16px;
-            border-bottom: 1px solid var(--border);
+            padding: 0 8px 0 20px;
             transition: background 0.1s;
-            -webkit-tap-highlight-color: transparent;
+            position: relative;
         }
 
-        .file-row:hover,
+        /* Rounded row inner border divider with end margins */
+        .file-row::after {
+            content: "";
+            position: absolute;
+            bottom: 0;
+            left: 20px;
+            right: 20px;
+            height: 1px;
+            background-color: var(--border);
+            border-radius: 1px;
+        }
+
+        .file-row:last-child::after {
+            display: none;
+            /* Hide divider line for the trailing item */
+        }
+
+        .file-row:hover {
+            background: var(--hover);
+        }
+
         .file-row:active {
-            background: color-mix(in srgb, var(--accent) 6%, transparent);
+            background: var(--active);
         }
 
+        /* Main clickable area */
         .row-btn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+            min-width: 0;
+            background: none;
+            border: none;
+            padding: 12px 0;
+            color: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        /* Icon column */
+        .row-icon {
+            flex-shrink: 0;
+            width: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted);
+        }
+
+        .row-icon.is-dir {
+            color: var(--text-2);
+        }
+
+        .row-icon.is-img {
+            color: #6b7280;
+        }
+
+        .row-icon.is-vid {
+            color: #6b7280;
+        }
+
+        .row-icon.is-aud {
+            color: #6b7280;
+        }
+
+        .row-icon.is-code {
+            color: #6b7280;
+        }
+
+        /* Name */
+        .row-name {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 14px;
+            color: var(--text);
+        }
+
+        .row-name.is-dir {
+            font-weight: 500;
+        }
+
+        /* Meta (file size) */
+        .row-meta {
+            color: var(--muted);
+            font-size: 12px;
+            flex-shrink: 0;
+            padding-right: 8px;
+        }
+
+        /* Chevron for directories */
+        .row-chevron {
+            color: var(--border-deep);
+            flex-shrink: 0;
+            display: flex;
+        }
+
+        /* Three-dot menu button */
+        .row-menu-btn {
+            flex-shrink: 0;
+            background: none;
+            border: none;
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-sm);
+            transition: background 0.12s, color 0.12s;
+            opacity: 1;
+            /* Always visible on mobile/touch screens by default */
+        }
+
+        @media (pointer: fine) {
+            .row-menu-btn {
+                opacity: 0;
+                /* Hidden on hover-capable desktop screens (mouse/pointer) until hovered */
+            }
+
+            .file-row:hover .row-menu-btn,
+            .row-menu-btn:focus-within {
+                opacity: 1;
+            }
+        }
+
+        .row-menu-btn:hover {
+            background: var(--active);
+            color: var(--text);
+        }
+
+        /* ── Context Menu ──────────────────────────────────────────── */
+        .ctx-menu {
+            position: fixed;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-lg);
+            padding: 4px;
+            z-index: 200;
+            min-width: 180px;
+            animation: fadeIn 0.12s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.96);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .ctx-item {
             display: flex;
             align-items: center;
             gap: 10px;
             width: 100%;
+            padding: 9px 12px;
             background: none;
             border: none;
-            padding: 0;
-            margin: 0;
-            font-family: var(--mono);
+            border-radius: var(--radius-sm);
+            color: var(--text);
             font-size: 13px;
-            color: inherit;
             text-align: left;
-            min-height: var(--row-h);
+            text-decoration: none;
+            transition: background 0.1s;
             cursor: pointer;
         }
 
-        .row-icon {
-            font-size: 15px;
-            flex-shrink: 0;
-            width: 20px;
-            text-align: center;
+        .ctx-item:hover {
+            background: var(--hover);
         }
 
-        .row-name {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            font-size: 13px;
+        .ctx-item.danger {
+            color: var(--danger);
         }
 
-        .row-name.is-dir {
-            color: var(--dir-color);
-        }
-
-        .row-name.is-file {
-            color: var(--text);
-        }
-
-        .row-meta {
+        .ctx-item .ctx-icon {
             color: var(--muted);
-            font-size: 11px;
             flex-shrink: 0;
-            text-align: right;
+            display: flex;
         }
 
-        .row-chevron {
-            color: var(--border);
-            font-size: 16px;
-            flex-shrink: 0;
+        .ctx-item.danger .ctx-icon {
+            color: var(--danger);
+        }
+
+        .ctx-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 4px 0;
         }
 
         /* ── Empty State ───────────────────────────────────────────── */
@@ -350,23 +746,24 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 8px;
-            padding: 64px 16px;
+            gap: 10px;
+            padding: 80px 24px;
             color: var(--muted);
-            font-size: 13px;
+            font-size: 14px;
         }
 
-        .empty-state .empty-icon {
-            font-size: 32px;
+        .empty-icon {
+            display: flex;
+            color: var(--border-deep);
         }
 
         /* ── Loading ───────────────────────────────────────────────── */
         .htmx-indicator {
             display: none;
-            padding: 16px;
+            padding: 20px;
             text-align: center;
             color: var(--muted);
-            font-size: 12px;
+            font-size: 13px;
         }
 
         .htmx-request .htmx-indicator {
@@ -375,11 +772,12 @@
 
         /* ── Status Bar ────────────────────────────────────────────── */
         .status-bar {
-            padding: 4px 16px;
+            padding: 0 20px;
+            height: 36px;
             background: var(--surface);
-            border-top: 1px solid var(--border);
+            /* Thin section border removed - color contrast handles separation */
             color: var(--muted);
-            font-size: 11px;
+            font-size: 12px;
             display: flex;
             align-items: center;
             gap: 16px;
@@ -390,58 +788,71 @@
             width: 6px;
             height: 6px;
             border-radius: 50%;
-            background: var(--accent);
+            background: #4ade80;
             display: inline-block;
-            box-shadow: 0 0 6px var(--accent);
+        }
+
+        .status-path {
+            margin-left: auto;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         /* ── Modal Backdrop ────────────────────────────────────────── */
         .modal-backdrop {
             position: fixed;
             inset: 0;
-            background: rgba(0, 0, 0, 0.72);
+            background: rgba(0, 0, 0, 0.40);
             display: flex;
             align-items: flex-end;
-            /* sheet slides up from bottom on mobile */
             justify-content: center;
             z-index: 100;
-            padding: 0;
         }
 
-        /* ── Action Sheet (file options) ───────────────────────────── */
+        /* ── Action Sheet ──────────────────────────────────────────── */
         .action-sheet {
             background: var(--surface);
-            border: 1px solid var(--border);
-            border-bottom: none;
-            border-radius: 12px 12px 0 0;
+            border-radius: var(--radius-lg) var(--radius-lg) 0 0;
             width: 100%;
-            max-width: 540px;
-            padding: 20px 20px 32px;
+            max-width: 480px;
+            padding: 20px 20px 36px;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 4px;
+            border-top: 1px solid var(--border);
+        }
+
+        .sheet-handle {
+            width: 36px;
+            height: 4px;
+            background: var(--border-deep);
+            border-radius: 2px;
+            align-self: center;
+            margin-bottom: 16px;
         }
 
         .sheet-filename {
             color: var(--text);
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            margin-bottom: 4px;
+            padding: 0 4px;
         }
 
         .sheet-meta {
             color: var(--muted);
-            font-size: 11px;
+            font-size: 12px;
             margin-bottom: 12px;
+            padding: 0 4px;
         }
 
         .sheet-actions {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 4px;
         }
 
         .sheet-btn {
@@ -449,45 +860,43 @@
             align-items: center;
             gap: 12px;
             width: 100%;
-            padding: 13px 16px;
-            background: var(--bg);
-            border: 1px solid var(--border);
+            padding: 13px 14px;
+            background: var(--surface-2);
+            border: none;
             border-radius: var(--radius);
             color: var(--text);
-            font-family: var(--mono);
-            font-size: 13px;
+            font-size: 14px;
             cursor: pointer;
             text-align: left;
-            transition: border-color 0.15s, background 0.15s;
+            transition: background 0.12s;
             text-decoration: none;
         }
 
         .sheet-btn:hover {
-            border-color: var(--accent);
-            background: color-mix(in srgb, var(--accent) 8%, transparent);
+            background: var(--active);
         }
 
         .sheet-btn-icon {
-            font-size: 16px;
+            color: var(--text-2);
             flex-shrink: 0;
+            display: flex;
         }
 
         .sheet-cancel {
-            margin-top: 4px;
+            margin-top: 8px;
             background: none;
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            color: var(--muted);
-            font-family: var(--mono);
-            font-size: 13px;
-            padding: 10px;
+            color: var(--text-2);
+            font-size: 14px;
+            padding: 11px;
             width: 100%;
             cursor: pointer;
-            transition: color 0.15s;
+            transition: background 0.12s;
         }
 
         .sheet-cancel:hover {
-            color: var(--danger);
+            background: var(--hover);
         }
 
         /* ── Viewer Modal ──────────────────────────────────────────── */
@@ -505,10 +914,25 @@
             align-items: center;
             gap: 12px;
             padding: 0 16px;
-            height: 48px;
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
+            height: 52px;
+            background: rgba(255, 255, 255, 0.04);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
             flex-shrink: 0;
+        }
+
+        .viewer-close {
+            background: none;
+            border: none;
+            color: rgba(255, 255, 255, 0.5);
+            display: flex;
+            padding: 6px;
+            border-radius: var(--radius-sm);
+            transition: color 0.1s, background 0.1s;
+        }
+
+        .viewer-close:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.08);
         }
 
         .viewer-title {
@@ -516,24 +940,27 @@
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            font-size: 13px;
-            color: var(--text);
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.85);
         }
 
-        .viewer-close {
-            background: none;
-            border: none;
-            color: var(--muted);
-            font-size: 20px;
-            line-height: 1;
-            padding: 4px 8px;
-            cursor: pointer;
-            border-radius: var(--radius);
-            transition: color 0.1s;
+        .viewer-dl {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 14px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: var(--radius-sm);
+            color: rgba(255, 255, 255, 0.75);
+            font-size: 12px;
+            transition: background 0.12s;
+            text-decoration: none;
         }
 
-        .viewer-close:hover {
-            color: var(--danger);
+        .viewer-dl:hover {
+            background: rgba(255, 255, 255, 0.14);
+            color: #fff;
         }
 
         .viewer-body {
@@ -542,10 +969,9 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 16px;
+            padding: 24px;
         }
 
-        /* Image viewer */
         .viewer-body img {
             max-width: 100%;
             max-height: 100%;
@@ -553,7 +979,6 @@
             border-radius: var(--radius);
         }
 
-        /* Video / Audio */
         .viewer-body video,
         .viewer-body audio {
             max-width: 100%;
@@ -561,25 +986,21 @@
             outline: none;
         }
 
-        /* PDF / text via iframe */
         .viewer-body iframe {
             width: 100%;
             height: 100%;
             border: none;
             background: #fff;
-            border-radius: var(--radius);
+            border-radius: var(--radius-sm);
         }
 
-        /* Plain text */
         .viewer-body pre {
-            color: var(--text);
-            font-family: var(--mono);
-            font-size: 12px;
-            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.85);
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 13px;
+            line-height: 1.65;
             white-space: pre-wrap;
             word-break: break-all;
-            margin: 0;
-            text-align: left;
             max-width: 800px;
             width: 100%;
         }
@@ -589,117 +1010,176 @@
 <body>
     <div class="layout" x-data="airnode" x-init="init()">
 
-        <!-- ══ Header ══════════════════════════════════════════════ -->
         <header class="header">
             <span class="wordmark">AirNode</span>
-            <span class="header-sep">|</span>
             <nav class="path-bar" id="path-bar">
-                <span class="path-prompt">›</span>
                 <div class="breadcrumbs">
                     {% include "partials/breadcrumbs.html" %}
                 </div>
-                <span class="path-cursor"></span>
             </nav>
         </header>
 
-        <!-- ══ Search ══════════════════════════════════════════════ -->
-        <div class="search-wrap">
-            <input class="search-input" type="search" placeholder="Filter files…" autocomplete="off" autocorrect="off"
-                spellcheck="false" x-model="query" x-on:input="
-          document.querySelectorAll('.file-row').forEach(row => {
-            row.style.display = row.dataset.name.toLowerCase().includes(query.toLowerCase()) ? '' : 'none';
-          });
-          updateCount();
-        " />
-        </div>
-
-        <!-- ══ File List ════════════════════════════════════════════ -->
         <main class="list-wrap">
             <div id="file-list-region" hx-indicator="#loading">
                 {% include "partials/file_list.html" %}
             </div>
-            <div id="loading" class="htmx-indicator">loading…</div>
+            <div id="loading" class="htmx-indicator">Loading…</div>
         </main>
 
-        <!-- ══ Status Bar ══════════════════════════════════════════ -->
         <footer class="status-bar">
-            <span><span class="status-dot"></span> LAN</span>
+            <span><span class="status-dot"></span></span>
+            <span>LAN</span>
             <span x-text="`${itemCount} items`"></span>
-            <span style="margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                x-text="currentPath"></span>
+            <span class="status-path" x-text="currentPath"></span>
         </footer>
 
-        <!-- ══ Action Sheet (file options modal) ════════════════════ -->
+        <div class="floating-controls">
+            <button id="fab-settings" class="fab-btn" x-on:click="settingsOpen = true" aria-label="Settings">
+                <i data-lucide="settings" style="width:18px;height:18px;"></i>
+            </button>
+
+            <div class="search-container" :class="{ 'is-active': searchOpen }">
+                <input id="search-input" class="search-input-inline" type="text" placeholder="Filter files…"
+                    autocomplete="off" autocorrect="off" spellcheck="false" x-model="query" x-show="searchOpen"
+                    x-on:input="
+                      document.querySelectorAll('.file-row').forEach(row => {
+                        row.style.display = row.dataset.name.toLowerCase().includes(query.toLowerCase()) ? '' : 'none';
+                      });
+                      updateCount();
+                    " x-on:keydown.escape="toggleSearch()" />
+
+                <button class="search-trigger" x-on:click.stop="toggleSearch()" aria-label="Toggle search">
+                    <span x-show="!searchOpen" style="display:flex;">
+                        <i data-lucide="search" style="width:18px;height:18px;"></i>
+                    </span>
+                    <span x-show="searchOpen" style="display:flex;">
+                        <i data-lucide="x" style="width:18px;height:18px;" stroke-width="3"></i>
+                    </span>
+                </button>
+            </div>
+        </div>
+
+        <div class="settings-panel" x-show="settingsOpen" x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="transform translate-x-full" x-transition:enter-end="transform translate-x-0"
+            x-transition:leave="transition ease-in duration-150" x-transition:leave-start="transform translate-x-0"
+            x-transition:leave-end="transform translate-x-full" x-on:click.outside="settingsOpen = false"
+            style="display:none">
+            <div class="settings-header">
+                <button class="settings-close" x-on:click="settingsOpen = false" aria-label="Close settings">
+                    <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
+                </button>
+                <span class="settings-title">Settings</span>
+            </div>
+            <div class="settings-body">
+                <div class="settings-group">
+                    <div class="settings-label">Appearance</div>
+                    <div class="settings-row">
+                        <div class="settings-info">
+                            <div class="settings-item-title">Dark Mode</div>
+                            <div class="settings-item-desc">Switch to a dark charcoal theme</div>
+                        </div>
+                        <button class="toggle-switch" :class="{ 'is-on': darkMode }" x-on:click="toggleDarkMode()"
+                            aria-label="Toggle Dark Mode">
+                            <span class="toggle-knob"></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="modal-backdrop" x-show="sheet !== null" x-transition.opacity x-on:click.self="closeSheet()"
             style="display:none">
             <div class="action-sheet" x-on:click.stop>
+                <div class="sheet-handle"></div>
                 <div class="sheet-filename" x-text="sheet?.name"></div>
                 <div class="sheet-meta" x-text="sheet?.size"></div>
 
                 <div class="sheet-actions">
-                    <!-- Direct file download option -->
-                    <a class="sheet-btn" x-bind:href="'/download?path=' + encodeURIComponent(sheet?.path ?? '')"
-                        x-on:click="closeSheet()">
-                        <span class="sheet-btn-icon">⬇️</span>
-                        <span>Download to device</span>
-                    </a>
-
-                    <!-- Inline viewer option for compatible media types -->
                     <button class="sheet-btn" x-show="sheet?.viewable" x-on:click="openViewer(sheet)">
-                        <span class="sheet-btn-icon">👁️</span>
-                        <span>View</span>
+                        <span class="sheet-btn-icon">
+                            <i data-lucide="eye" style="width:16px;height:16px;"></i>
+                        </span>
+                        <span>Open</span>
                     </button>
+
+                    <a class="sheet-btn" x-bind:href="'/download?path=' + encodeURIComponent(sheet?.path ?? '')"
+                        x-on:click.prevent="window.location.href = '/download?path=' + encodeURIComponent(sheet.path); closeSheet()">
+                        <span class="sheet-btn-icon">
+                            <i data-lucide="download" style="width:16px;height:16px;"></i>
+                        </span>
+                        <span>Download</span>
+                    </a>
                 </div>
 
                 <button class="sheet-cancel" x-on:click="closeSheet()">Cancel</button>
             </div>
         </div>
 
-        <!-- ══ Viewer ════════════════════════════════════════════════ -->
+        <div class="ctx-menu" x-show="contextMenu !== null" x-on:click.stop
+            x-bind:style="contextMenu ? `top:${Math.min(contextMenu.y, window.innerHeight - 160)}px; left:${Math.min(contextMenu.x, window.innerWidth - 200)}px` : ''"
+            style="display:none">
+            <button class="ctx-item" x-show="contextMenu?.file?.viewable" x-on:click="openViewer(contextMenu.file)">
+                <span class="ctx-icon"><i data-lucide="eye" style="width:14px;height:14px;"></i></span>
+                Open
+            </button>
+
+            <a class="ctx-item" x-bind:href="'/download?path=' + encodeURIComponent(contextMenu?.file?.path ?? '')"
+                x-on:click.prevent="window.location.href = '/download?path=' + encodeURIComponent(contextMenu.file.path); closeContextMenu()">
+                <span class="ctx-icon"><i data-lucide="download" style="width:14px;height:14px;"></i></span>
+                Download
+            </a>
+        </div>
+
         <div class="viewer-wrap" x-show="viewer !== null" x-transition.opacity style="display:none">
             <div class="viewer-header">
-                <button class="viewer-close" x-on:click="closeViewer()">✕</button>
+                <button class="viewer-close" x-on:click="closeViewer()" aria-label="Close viewer">
+                    <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
+                </button>
                 <span class="viewer-title" x-text="viewer?.name"></span>
-                <a class="sheet-btn" style="width:auto;padding:6px 12px;font-size:11px;"
-                    x-bind:href="'/download?path=' + encodeURIComponent(viewer?.path ?? '')">⬇️</a>
+                <a class="viewer-dl" x-bind:href="'/download?path=' + encodeURIComponent(viewer?.path ?? '')">
+                    <i data-lucide="download" style="width:14px;height:14px;"></i>
+                    Download
+                </a>
             </div>
 
             <div class="viewer-body">
-                <!-- Image rendering container -->
                 <template x-if="viewer?.kind === 'img'">
                     <img x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)" x-bind:alt="viewer.name" />
                 </template>
 
-                <!-- Video player container -->
                 <template x-if="viewer?.kind === 'video'">
                     <video controls autoplay x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></video>
                 </template>
 
-                <!-- Audio player container -->
                 <template x-if="viewer?.kind === 'audio'">
                     <audio controls autoplay x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></audio>
                 </template>
 
-                <!-- PDF document frame -->
                 <template x-if="viewer?.kind === 'pdf'">
                     <iframe x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></iframe>
                 </template>
 
-                <!-- Plain text and source code container -->
                 <template x-if="viewer?.kind === 'text'">
                     <div x-data="{ content: '' }" x-init="fetch('/view?path=' + encodeURIComponent(viewer.path))
-                          .then(r => r.text())
-                          .then(t => content = t)">
+                                .then(r => r.text())
+                                .then(t => content = t)">
                         <pre x-text="content"></pre>
                     </div>
                 </template>
             </div>
         </div>
 
-        <!-- Element holding initial path state to avoid inline Jinja string escaping inside Alpine JS initialization -->
         <span id="init-path" data-path="{{ current_path }}" style="display:none"></span>
-    </div><!-- /.layout -->
-
+    </div>
+    <script>
+        // Re-render Lucide icons after htmx swaps
+        document.addEventListener('htmx:afterSwap', () => {
+            if (window.lucide) lucide.createIcons();
+        });
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.lucide) lucide.createIcons();
+        });
+    </script>
 </body>
 
 </html>
