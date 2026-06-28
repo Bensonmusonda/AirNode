@@ -480,6 +480,10 @@ button {
     cursor: pointer;
 }
 
+.row-btn > * {
+    pointer-events: none;
+}
+
 .row-icon {
     flex-shrink: 0;
     width: 20px;

@@ -5,10 +5,7 @@
         {% for crumb in breadcrumbs %}
         {% if not loop.last %}
         <span class="crumb">
-            <button hx-get="/browse?path={{ crumb.path | urlencode }}" hx-target="#file-list-region" hx-swap="innerHTML"
-                hx-push-url="/browse?path={{ crumb.path | urlencode }}"
-                x-on:click="currentPath = '{{ crumb.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = '');">{{
-                crumb.label }}</button>
+            <button onclick="navigateTo('{{ crumb.path | replace("'", "\\'") }}')">{{ crumb.label }}</button>
             <span class="crumb-sep">/</span>
         </span>
         {% else %}
@@ -20,17 +17,14 @@
 {% endif %}
 
 {# Directory and file entries listing #}
-<div hx-get="/browse?path={{ current_path | urlencode }}" hx-trigger="refresh-directory from:body"
-    hx-target="#file-list-region" hx-swap="innerHTML">
+<div id="file-list-container" data-current-path="{{ current_path }}">
     {% if entries %}
     <ul class="file-list">
         {% for entry in entries %}
-        <li class="file-row" data-name="{{ entry.name }}">
+        <li class="file-row" data-name="{{ entry.name }}" data-type="{{ entry.type }}">
 
             {% if entry.type == "directory" %}
-            <button class="row-btn" hx-get="/browse?path={{ entry.path | urlencode }}" hx-target="#file-list-region"
-                hx-swap="innerHTML" hx-push-url="/browse?path={{ entry.path | urlencode }}"
-                x-on:click="currentPath = '{{ entry.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = ''); $nextTick(() => updateCount())">
+            <button class="row-btn" onclick="navigateTo('{{ entry.path | replace("'", "\\'") | replace("\\", "\\\\") }}')">
                 <span class="row-icon is-dir">
                     <i data-lucide="folder" fill="currentColor" style="width:16px;height:16px;"></i>
                 </span>

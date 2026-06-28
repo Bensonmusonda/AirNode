@@ -1,13 +1,9 @@
 {# Navigation breadcrumbs rendered inside the header. #}
 
-
 {% for crumb in breadcrumbs %}
 {% if not loop.last %}
 <span class="crumb">
-    <button hx-get="/browse?path={{ crumb.path | urlencode }}" hx-target="#file-list-region" hx-swap="innerHTML"
-        hx-push-url="/browse?path={{ crumb.path | urlencode }}"
-        x-on:click="currentPath = '{{ crumb.path | replace("'", "\\'") }}'; query = ''; document.querySelectorAll('.file-row').forEach(r => r.style.display = '');">{{
-        crumb.label }}</button>
+    <button onclick="navigateTo('{{ crumb.path | replace("'", "\\'") }}')">{{ crumb.label }}</button>
     <span class="crumb-sep">/</span>
 </span>
 {% else %}

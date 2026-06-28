@@ -41,6 +41,73 @@
                     this.currentPath = document.getElementById('init-path').dataset.path;
                     this.updateCount();
 
+                    // Central navigation function. All directory opens, breadcrumb clicks,
+                    // and post-mutation refreshes go through here. Never call htmx.trigger
+                    // or manipulate hx-* attributes directly — this is the single source of truth.
+                    window.navigateTo = (path, pushState = true) => {
+                        const region = document.getElementById('file-list-region');
+                        if (!region) return;
+
+                        const url = '/browse?path=' + encodeURIComponent(path);
+
+                        fetch(url, { headers: { 'HX-Request': 'true' } })
+                            .then(r => {
+                                if (!r.ok) throw new Error('HTTP ' + r.status);
+                                return r.text();
+                            })
+                            .then(html => {
+                                // Parse the response so we can handle the OOB breadcrumb swap
+                                // separately from the main file-list content.
+                                const doc = new DOMParser().parseFromString(html, 'text/html');
+
+                                // Handle OOB breadcrumb update if present
+                                const oob = doc.querySelector('[hx-swap-oob]');
+                                if (oob) {
+                                    const targetSel = oob.getAttribute('hx-swap-oob').replace('innerHTML:', '');
+                                    const target = document.querySelector(targetSel);
+                                    if (target) {
+                                        target.innerHTML = oob.innerHTML;
+                                        htmx.process(target);
+                                    }
+                                    oob.remove();
+                                }
+
+                                // Swap the main file list
+                                region.innerHTML = doc.body.innerHTML;
+                                htmx.process(region);
+
+                                // Sync Alpine state
+                                const container = document.getElementById('file-list-container');
+                                if (container) this.currentPath = container.dataset.currentPath;
+                                this.query = '';
+                                this.updateCount();
+
+                                // Re-init icons for newly rendered content
+                                if (window.lucide) lucide.createIcons();
+
+                                // Push browser history
+                                if (pushState) {
+                                    history.pushState({ path }, '', url);
+                                }
+                            })
+                            .catch(err => {
+                                console.error('[AirNode] Navigation failed:', err);
+                            });
+                    };
+
+                    // Handle browser back/forward
+                    window.addEventListener('popstate', (e) => {
+                        const path = e.state?.path ?? '/';
+                        window.navigateTo(path, false);
+                    });
+
+                    // Single stable refresh-directory listener — reads live path, never stacks
+                    window.addEventListener('refresh-directory', () => {
+                        const container = document.getElementById('file-list-container');
+                        const path = container ? container.dataset.currentPath : (this.currentPath || '/');
+                        window.navigateTo(path, false);
+                    });
+
                     if (this.darkMode) {
                         document.documentElement.classList.add('dark');
                     } else {
@@ -65,10 +132,8 @@
                 },
 
                 updateCount() {
-                    const visibleRows = Array.from(document.querySelectorAll('.file-row:not([style*="display: none"])'));
-                    
-                    this.folderCount = visibleRows.filter(row => row.querySelector('[data-lucide="folder"]')).length;
-                    this.fileCount = visibleRows.filter(row => !row.querySelector('[data-lucide="folder"]')).length;
+                    this.folderCount = document.querySelectorAll('.file-row[data-type="directory"]:not([style*="display: none"])').length;
+                    this.fileCount = document.querySelectorAll('.file-row[data-type="file"]:not([style*="display: none"])').length;
                 },
 
                 openModal(file) {
@@ -140,7 +205,7 @@
                     })
                         .then(res => {
                             if (res.ok) {
-                                document.body.dispatchEvent(new CustomEvent('refresh-directory'));
+                                window.dispatchEvent(new CustomEvent('refresh-directory'));
                                 this.menuOpen = false;
                             } else {
                                 alert('Upload transaction rejected by host.');
@@ -188,10 +253,7 @@
         x-on:change="$data.handleFileUpload($event)" />
 
     <div class="layout" 
-        x-data="airnode"
-        x-on:refresh-directory.window="
-            htmx.ajax('GET', '/browse?path=' + encodeURIComponent(currentPath), { target: '#file-list-region', swap: 'innerHTML' })
-        ">
+        x-data="airnode">
 
         <header class="header">
             <span class="wordmark">AirNode</span>
@@ -212,7 +274,7 @@
         </header>
 
         <main class="list-wrap">
-            <div id="file-list-region" hx-indicator="#loading">
+            <div id="file-list-region">
                 {% include "partials/file_list.html" %}
             </div>
             <div id="loading" class="htmx-indicator">Loading…</div>
@@ -232,12 +294,90 @@
         </footer>
 
         <div class="modal-overlay" 
+             x-data="{ showNewFolderModal: false, targetDir: '', folderName: '', creating: false }"
+             x-show="showNewFolderModal" 
+             x-on:trigger-new-folder-modal.window="
+                 showNewFolderModal = true; 
+                 targetDir = event.detail.current_path;
+                 folderName = 'New Folder'; 
+                 creating = false;
+                 $nextTick(() => { $refs.folderInput.focus(); $refs.folderInput.select(); });
+             "
+             x-on:click.self="if(!creating) { showNewFolderModal = false; document.body.style.overflow = ''; }"
+             x-transition:enter="transition ease-out duration-150"
+             x-transition:enter-start="opacity-0"
+             x-transition:enter-end="opacity-100"
+             x-transition:leave="transition ease-in duration-100"
+             x-transition:leave-start="opacity-100"
+             x-transition:leave-end="opacity-0"
+             style="display: none;">
+            <div class="modal-card" x-on:click.stop x-on:click.outside="if(!creating) { showNewFolderModal = false; document.body.style.overflow = ''; }">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                    <i data-lucide="folder-plus" x-init="$nextTick(() => { if(window.lucide) lucide.createIcons() })" style="stroke: var(--text-2); width:19px; height:19px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">Create New Folder</h4>
+                </div>
+                
+                <div style="margin-top: 4px;">
+                    <input type="text" 
+                           x-model="folderName" 
+                           x-ref="folderInput"
+                           x-bind:disabled="creating"
+                           x-on:keydown.enter="if(folderName.trim()) $refs.confirmCreateBtn.click()"
+                           style="width: 100%; padding: 10px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); font-size: 13px; box-sizing: border-box; outline: none;" />
+                </div>
+
+                <div class="modal-actions">
+                    <button class="modal-btn" x-bind:disabled="creating" x-on:click="showNewFolderModal = false; document.body.style.overflow = '';">Cancel</button>
+                    <button class="modal-btn primary" 
+                            x-ref="confirmCreateBtn"
+                            style="display: inline-flex; align-items: center; gap: 8px; min-width: 85px; justify-content: center;"
+                            x-bind:disabled="creating || !folderName.trim()"
+                            x-on:click="
+                                creating = true;
+                                
+                                htmx.ajax('POST', '/new-folder', { 
+                                    values: { 
+                                        current_path: targetDir, 
+                                        folder_name: folderName.trim() 
+                                    },
+                                    headers: {
+                                        'Content-Type': 'application/x-www-form-urlencoded'
+                                    },
+                                    swap: 'none',
+                                    handler: function(elt, info) {
+                                        creating = false;
+                                        document.body.style.overflow = '';
+                                        if (info.xhr.status === 200) {
+                                            showNewFolderModal = false;
+                                            window.dispatchEvent(new CustomEvent('refresh-directory'));
+                                        } else {
+                                            window.dispatchEvent(new CustomEvent('show-toast', { 
+                                                detail: { message: info.xhr.responseText || 'Failed to create folder.', type: 'error' } 
+                                            }));
+                                        }
+                                    }
+                                });
+                            ">
+                        <div class="spinner" x-show="creating" style="width: 12px; height: 12px; border-width: 2px; margin: 0; display: none;"></div>
+                        <span x-text="creating ? 'Creating...' : 'Create'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal-overlay" 
             x-data="{ showModal: false, collisionFilename: '' }"
             x-show="showModal" 
             x-on:file-collision-detected.window="showModal = true; collisionFilename = event.detail.filename;"
-            style="display: none;"
-            x-transition>
-            <div class="modal-card" x-on:click.outside="showModal = false">
+            x-on:click.self="showModal = false; document.body.style.overflow = '';"
+            x-transition:enter="transition ease-out duration-150"
+            x-transition:enter-start="opacity-0"
+            x-transition:enter-end="opacity-100"
+            x-transition:leave="transition ease-in duration-100"
+            x-transition:leave-start="opacity-100"
+            x-transition:leave-end="opacity-0"
+            style="display: none;">
+            <div class="modal-card" x-on:click.stop x-on:click.outside="showModal = false; document.body.style.overflow = '';">
                 <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
                     <i data-lucide="info" style="stroke: var(--text-2); width:20px; height:20px;"></i>
                     <h4 style="margin:0; font-size:15px; font-weight:600;">File Already Exists</h4>
@@ -246,10 +386,11 @@
                     A file named <strong style="color: var(--text);" x-text="collisionFilename"></strong> already exists in this folder. Overwrite it?
                 </p>
                 <div class="modal-actions">
-                    <button class="modal-btn" x-on:click="showModal = false">Cancel</button>
+                    <button class="modal-btn" x-on:click="showModal = false; document.body.style.overflow = '';">Cancel</button>
                     <button class="modal-btn primary"
                             x-on:click="
                                 showModal = false;
+                                document.body.style.overflow = '';
                                 contextMenu = null;
                                 document.getElementById('force-overwrite-input').value = 'true';
                                 htmx.trigger('#file-upload-form', 'submit');
@@ -269,9 +410,15 @@
                  deleteTargetUrl = event.detail.url;
                  deleting = false;
              "
-             style="display: none;"
-             x-transition>
-            <div class="modal-card" x-on:click.outside="if(!deleting) showDeleteModal = false">
+             x-on:click.self="if(!deleting) { showDeleteModal = false; document.body.style.overflow = ''; }"
+             x-transition:enter="transition ease-out duration-150"
+             x-transition:enter-start="opacity-0"
+             x-transition:enter-end="opacity-100"
+             x-transition:leave="transition ease-in duration-100"
+             x-transition:leave-start="opacity-100"
+             x-transition:leave-end="opacity-0"
+             style="display: none;">
+            <div class="modal-card" x-on:click.stop x-on:click.outside="if(!deleting) { showDeleteModal = false; document.body.style.overflow = ''; }">
                 <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
                     <i data-lucide="trash-2" style="stroke: var(--text-2); width:19px; height:19px;"></i>
                     <h4 style="margin:0; font-size:15px; font-weight:600;">Delete File</h4>
@@ -280,7 +427,7 @@
                     Permanently drop tracking for <strong style="color: var(--text);" x-text="deleteTargetName"></strong>? This action is irreversible.
                 </p>
                 <div class="modal-actions">
-                    <button class="modal-btn" x-bind:disabled="deleting" x-on:click="showDeleteModal = false">Cancel</button>
+                    <button class="modal-btn" x-bind:disabled="deleting" x-on:click="showDeleteModal = false; document.body.style.overflow = '';">Cancel</button>
                     <button class="modal-btn primary" 
                             style="display: inline-flex; align-items: center; gap: 8px; min-width: 85px; justify-content: center;"
                             x-bind:disabled="deleting"
@@ -292,6 +439,7 @@
                                     swap: 'none',
                                     handler: function(elt, info) {
                                         deleting = false;
+                                        document.body.style.overflow = '';
                                         showDeleteModal = false;
                                         if (info.xhr.status === 200) {
                                             window.dispatchEvent(new CustomEvent('refresh-directory'));
@@ -312,18 +460,24 @@
 
         <div class="modal-overlay" 
              x-data="{ showRenameModal: false, renameTargetUrl: '', currentOldName: '', newName: '', renaming: false }"
-             x-show="showRenameModal" 
+             x-show="showRenameModal"
              x-on:trigger-rename-modal.window="
                  showRenameModal = true; 
                  renameTargetUrl = event.detail.url;
                  currentOldName = event.detail.name;
-                 newName = event.detail.name; /* Pre-fill the input with the old name */
+                 newName = event.detail.name;
                  renaming = false;
                  $nextTick(() => { $refs.renameInput.focus(); $refs.renameInput.select(); });
              "
-             style="display: none;"
-             x-transition>
-            <div class="modal-card" x-on:click.outside="if(!renaming) showRenameModal = false">
+             x-on:click.self="if(!renaming) { showRenameModal = false; document.body.style.overflow = ''; }"
+             x-transition:enter="transition ease-out duration-150"
+             x-transition:enter-start="opacity-0"
+             x-transition:enter-end="opacity-100"
+             x-transition:leave="transition ease-in duration-100"
+             x-transition:leave-start="opacity-100"
+             x-transition:leave-end="opacity-0"
+             style="display: none;">
+            <div class="modal-card" x-on:click.stop x-on:click.outside="if(!renaming) { showRenameModal = false; document.body.style.overflow = ''; }">
                 <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
                     <i data-lucide="edit-2" style="stroke: var(--text-2); width:19px; height:19px;"></i>
                     <h4 style="margin:0; font-size:15px; font-weight:600;">Rename Item</h4>
@@ -339,7 +493,7 @@
                 </div>
 
                 <div class="modal-actions">
-                    <button class="modal-btn" x-bind:disabled="renaming" x-on:click="showRenameModal = false">Cancel</button>
+                    <button class="modal-btn" x-bind:disabled="renaming" x-on:click="showRenameModal = false; document.body.style.overflow = '';">Cancel</button>
                     <button class="modal-btn primary" 
                         x-ref="confirmRenameBtn"
                         style="display: inline-flex; align-items: center; gap: 8px; min-width: 85px; justify-content: center;"
@@ -348,7 +502,6 @@
                             renaming = true;
                             contextMenu = null;
                             
-                            // Go back to the native object structure HTMX expects
                             htmx.ajax('POST', '/rename', { 
                                 values: { 
                                     path: renameTargetUrl, 
@@ -360,9 +513,9 @@
                                 swap: 'none',
                                 handler: function(elt, info) {
                                     renaming = false;
+                                    document.body.style.overflow = '';
                                     if (info.xhr.status === 200) {
                                         showRenameModal = false;
-                                        // Forces the file matrix to reload on both desktop & mobile screens
                                         window.dispatchEvent(new CustomEvent('refresh-directory'));
                                     } else {
                                         window.dispatchEvent(new CustomEvent('show-toast', { 
@@ -493,6 +646,16 @@
                 <span style="flex:1" x-text="darkMode ? 'Light Theme' : 'Dark Theme'"></span>
             </button>
 
+            <button class="dropdown-item" x-on:click="
+                window.dispatchEvent(new CustomEvent('trigger-new-folder-modal', { 
+                    detail: { current_path: currentPath } 
+                }));
+                settingsOpen = null;
+            ">
+                <span class="dropdown-icon"><i data-lucide="folder-plus" x-init="$nextTick(() => { if(window.lucide) lucide.createIcons() })" style="width:14px;height:14px;"></i></span>
+                <span>New Folder</span>
+            </button>
+
             <div class="dropdown-divider"></div>
 
             <button class="dropdown-item" x-on:click="settingsOpen = null">
@@ -546,7 +709,7 @@
                 Open
             </button>
 
-            <a class="ctx-item" x-bind:href="'/download?path=' + encodeURIComponent(contextMenu?.file?.path ?? '')"
+            <a class="ctx-item" x-show="!contextMenu?.file?.isDir" x-bind:href="'/download?path=' + encodeURIComponent(contextMenu?.file?.path ?? '')"
                 x-on:click.prevent="window.location.href = '/download?path=' + encodeURIComponent(contextMenu.file.path); closeContextMenu()">
                 <span class="ctx-icon"><i data-lucide="download" style="width:14px;height:14px;"></i></span>
                 Download
@@ -655,9 +818,6 @@
     </div>
 
     <script>
-        document.addEventListener('htmx:afterSwap', () => {
-            if (window.lucide) lucide.createIcons();
-        });
         document.addEventListener('DOMContentLoaded', () => {
             if (window.lucide) lucide.createIcons();
         });
