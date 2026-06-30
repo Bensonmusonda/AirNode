@@ -1,0 +1,158 @@
+/* ── Image Viewer ───────────────────────────────────────────
+   Imported via <link> in index.html alongside app.css.
+   Scoped entirely to .img-viewer-* and overrides to
+   .viewer-body and .viewer-header for the image kind.
+──────────────────────────────────────────────────────────── */
+
+/* Container that fills viewer-body for images */
+.img-viewer-stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    /* Prevent browser default touch actions so we handle them */
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: grab;
+}
+
+.img-viewer-stage:active {
+    cursor: grabbing;
+}
+
+/* The image itself */
+.img-viewer-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: var(--radius);
+    /* Hardware-accelerate the transform */
+    will-change: transform;
+    transform-origin: center center;
+    transition: transform 0.18s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    pointer-events: none; /* stage handles all pointer events */
+    display: block;
+}
+
+/* While dragging/pinching, skip the transition so it feels instant */
+.img-viewer-stage.is-gesturing .img-viewer-img {
+    transition: none;
+}
+
+/* ── Loading spinner ─────────────────────────────────────── */
+.img-viewer-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    z-index: 2;
+}
+
+.img-viewer-spinner {
+    width: 32px;
+    height: 32px;
+    border: 2.5px solid rgba(255, 255, 255, 0.15);
+    border-top-color: rgba(255, 255, 255, 0.7);
+    border-radius: 50%;
+    animation: imgSpinnerSpin 0.7s linear infinite;
+}
+
+@keyframes imgSpinnerSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Error state ─────────────────────────────────────────── */
+.img-viewer-error {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 13px;
+}
+
+/* ── Prev / Next navigation buttons ─────────────────────── */
+.img-nav-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 40px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 50%;
+    color: rgba(255, 255, 255, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 10;
+    transition: background 0.15s, color 0.15s, opacity 0.2s;
+    opacity: 0;
+}
+
+/* Desktop with hover support — fade in on hover over the stage */
+@media (hover: hover) and (pointer: fine) {
+    .img-viewer-stage:hover .img-nav-btn {
+        opacity: 1;
+    }
+}
+
+/* Touch devices — swipe handles navigation, so hide these entirely */
+@media (hover: none), (pointer: coarse) {
+    .img-nav-btn {
+        display: none;
+    }
+}
+
+.img-nav-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+}
+
+.img-nav-btn.prev { left: 12px; }
+.img-nav-btn.next { right: 12px; }
+
+/* ── Zoom indicator pill ─────────────────────────────────── */
+.img-zoom-pill {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+    pointer-events: none;
+    z-index: 10;
+    transition: opacity 0.3s;
+}
+
+/* ── Header fade when zoomed ─────────────────────────────── */
+.viewer-header {
+    transition: opacity 0.25s, transform 0.25s;
+}
+
+.viewer-header.is-hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-8px);
+}
+
+/* ── Image counter ───────────────────────────────────────── */
+.img-counter {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+    flex-shrink: 0;
+}

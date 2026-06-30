@@ -8,6 +8,7 @@
     <meta name="description" content="AirNode – local network file explorer and media server." />
 
     <link rel="stylesheet" href="/static/css/app.css" />
+    <link rel="stylesheet" href="/static/css/viewer.css" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -413,9 +414,12 @@
                 }
             }));
         });
+
     </script>
 
+    <script src="/static/js/image-viewer.js"></script>
     <script src="/static/vendor/alpine.min.js" defer></script>
+    
 </head>
 
 <body>
@@ -1032,7 +1036,7 @@
         </div>
 
         <div class="viewer-wrap" x-show="viewer !== null" x-transition.opacity style="display:none">
-            <div class="viewer-header">
+            <div class="viewer-header" :class="{ 'is-hidden': viewer?.kind === 'img' && $data.isZoomed }">
                 <button class="viewer-close" x-on:click="closeViewer()" aria-label="Close viewer">
                     <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
                 </button>
@@ -1044,7 +1048,7 @@
             </div>
             <div class="viewer-body">
                 <template x-if="viewer?.kind === 'img'">
-                    <img x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)" x-bind:alt="viewer.name" />
+                    {% include "partials/image_viewer.html" %}
                 </template>
                 <template x-if="viewer?.kind === 'video'">
                     <video controls autoplay x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></video>

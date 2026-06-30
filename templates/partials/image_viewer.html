@@ -1,0 +1,62 @@
+{#
+  partials/image_viewer.html
+  Included inside the .viewer-wrap when viewer.kind === 'img'.
+  Depends on:
+    - static/js/image-viewer.js   (imageViewerComponent function)
+    - static/css/viewer.css
+  The parent Alpine scope provides `viewer` (name, path, kind).
+#}
+<div class="img-viewer-stage"
+     x-data="imageViewerComponent()"
+     x-init="init()"
+
+     :class="{ 'is-gesturing': _isDragging || Object.keys(_activePointers).length === 2 }"
+
+     @pointerdown="onPointerDown($event)"
+     @pointermove="onPointerMove($event)"
+     @pointerup="onPointerUp($event)"
+     @pointercancel="onPointerCancel($event)"
+     @click="onTap($event)">
+
+    <!-- Loading spinner -->
+    <div class="img-viewer-loading" x-show="loading">
+        <div class="img-viewer-spinner"></div>
+    </div>
+
+    <!-- Error state -->
+    <div class="img-viewer-error" x-show="error && !loading">
+        <i data-lucide="image-off" style="width:32px;height:32px;"></i>
+        <span>Could not load image</span>
+    </div>
+
+    <!-- The image -->
+    <img class="img-viewer-img"
+         x-show="!loading && !error"
+         :src="'/view?path=' + encodeURIComponent($store?.viewer?.path ?? viewer.path)"
+         :alt="viewer.name"
+         :style="`transform: ${transform}`"
+         @load="loading = false; error = false;"
+         @error="loading = false; error = true;" />
+
+    <!-- Prev button -->
+    <button class="img-nav-btn prev"
+            @pointerdown.stop
+            @pointerup.stop="navigate(-1)"
+            aria-label="Previous image">
+        <i data-lucide="chevron-left" style="width:18px;height:18px;"></i>
+    </button>
+
+    <!-- Next button -->
+    <button class="img-nav-btn next"
+            @pointerdown.stop
+            @pointerup.stop="navigate(1)"
+            aria-label="Next image">
+        <i data-lucide="chevron-right" style="width:18px;height:18px;"></i>
+    </button>
+
+    <!-- Zoom level pill — only shows when zoomed -->
+    <div class="img-zoom-pill"
+         x-show="isZoomed"
+         x-text="`${Math.round(scale * 100)}%`">
+    </div>
+</div>
