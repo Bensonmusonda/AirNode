@@ -9,6 +9,7 @@
 
     <link rel="stylesheet" href="/static/css/app.css" />
     <link rel="stylesheet" href="/static/css/viewer.css" />
+    <link rel="stylesheet" href="/static/css/audio-player.css" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -418,6 +419,7 @@
     </script>
 
     <script src="/static/js/image-viewer.js"></script>
+    <script src="/static/js/audio-player.js"></script>
     <script src="/static/vendor/alpine.min.js" defer></script>
     
 </head>
@@ -1054,7 +1056,7 @@
                     <video controls autoplay x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></video>
                 </template>
                 <template x-if="viewer?.kind === 'audio'">
-                    <audio controls autoplay x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></video>
+                    {% include "partials/audio_player.html" %}
                 </template>
                 <template x-if="viewer?.kind === 'pdf'">
                     <iframe x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></iframe>

@@ -1,0 +1,256 @@
+/* ── Audio Player ───────────────────────────────────────────
+   Imported via <link> in index.html alongside app.css/viewer.css.
+──────────────────────────────────────────────────────────── */
+
+.audio-player {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    width: 100%;
+    max-width: 420px;
+    padding: 32px 24px;
+}
+
+.audio-main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+    flex: 1;
+}
+
+/* ── Artwork placeholder ─────────────────────────────────── */
+.audio-art {
+    width: 220px;
+    height: 220px;
+    border-radius: var(--radius-lg);
+    background: linear-gradient(160deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.audio-art i {
+    color: rgba(255, 255, 255, 0.25);
+    width: 64px;
+    height: 64px;
+}
+
+/* Gentle pulse while playing, purely decorative */
+.audio-art.is-playing {
+    animation: audioArtPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes audioArtPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.05); }
+    50% { box-shadow: 0 0 0 14px rgba(255, 255, 255, 0); }
+}
+
+/* ── Track title ─────────────────────────────────────────── */
+.audio-title {
+    font-size: 15px;
+    color: rgba(255, 255, 255, 0.85);
+    text-align: center;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 12px;
+}
+
+/* ── Seek bar ─────────────────────────────────────────────── */
+.audio-seek-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+}
+
+.audio-time {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.4);
+    font-variant-numeric: tabular-nums;
+    min-width: 32px;
+}
+
+.audio-time.end {
+    text-align: right;
+}
+
+.audio-seek {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(
+        to right,
+        rgba(255, 255, 255, 0.7) var(--seek-pct, 0%),
+        rgba(255, 255, 255, 0.15) var(--seek-pct, 0%)
+    );
+    cursor: pointer;
+    outline: none;
+}
+
+.audio-seek::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: #fff;
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.audio-seek::-moz-range-thumb {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: #fff;
+    border: none;
+    cursor: pointer;
+}
+
+/* ── Transport controls ──────────────────────────────────── */
+.audio-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+}
+
+.audio-skip-btn {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+
+.audio-skip-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.audio-play-btn {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #fff;
+    color: #111;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.12s, background 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+
+.audio-play-btn:hover {
+    transform: scale(1.05);
+}
+
+.audio-play-btn:active {
+    transform: scale(0.96);
+}
+
+.audio-play-btn i {
+    /* Slight optical centering nudge for the play triangle */
+    margin-left: 2px;
+}
+
+/* Paused state — solid white fill, dark icon (current default) */
+
+/* Playing state — inverted to an outlined ring with white icon,
+   so the button visually reflects "currently active" vs "tap to start" */
+.audio-play-btn.is-playing {
+    background: transparent;
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    color: #fff;
+}
+
+.audio-play-btn.is-playing i {
+    margin-left: 0;
+}
+
+/* ── Volume — vertical, sits to the right of the player ──── */
+.audio-volume-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    height: 220px;
+    padding: 16px 0;
+    flex-shrink: 0;
+}
+
+.audio-volume-slider-vertical {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    width: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.15);
+    cursor: pointer;
+    outline: none;
+    /* Rotate a horizontal range input into a vertical one */
+    writing-mode: vertical-lr;
+    direction: rtl;
+}
+
+.audio-volume-slider-vertical::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+}
+
+.audio-volume-slider-vertical::-moz-range-thumb {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.85);
+    border: none;
+    cursor: pointer;
+}
+
+.audio-volume-col i {
+    color: rgba(255, 255, 255, 0.4);
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
+/* ── Loading / error states ──────────────────────────────── */
+.audio-status {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.4);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.audio-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.15);
+    border-top-color: rgba(255, 255, 255, 0.6);
+    border-radius: 50%;
+    animation: audioSpinnerSpin 0.7s linear infinite;
+}
+
+@keyframes audioSpinnerSpin {
+    to { transform: rotate(360deg); }
+}
