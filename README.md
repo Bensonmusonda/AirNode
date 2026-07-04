@@ -128,3 +128,7 @@ Run with hot-reload during development:
 ```powershell
 .venv\Scripts\uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details. In short: you're free to use, modify, and distribute this code, including commercially, as long as the original copyright notice is kept.
