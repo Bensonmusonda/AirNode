@@ -4,10 +4,7 @@
 
 .audio-player {
     display: flex;
-    flex-direction: row;
-    align-items: center;
     justify-content: center;
-    gap: 20px;
     width: 100%;
     max-width: 420px;
     padding: 32px 24px;
@@ -18,7 +15,7 @@
     flex-direction: column;
     align-items: center;
     gap: 28px;
-    flex: 1;
+    width: 100%;
 }
 
 /* ── Artwork placeholder ─────────────────────────────────── */
@@ -32,6 +29,10 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    
+    /* Added: Smoothes out frame-rate variations from audio data gaps */
+    transition: transform 0.06s ease-out; 
+    will-change: transform;
 }
 
 .audio-art i {
@@ -126,7 +127,7 @@
 .audio-skip-btn {
     background: none;
     border: none;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--text-2); /* Changes from rgba(255,255,255,0.6) to match theme text */
     display: flex;
     align-items: center;
     justify-content: center;
@@ -137,8 +138,8 @@
 }
 
 .audio-skip-btn:hover {
-    color: #fff;
-    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    background: var(--hover);
 }
 
 .audio-play-btn {
@@ -156,6 +157,16 @@
     flex-shrink: 0;
 }
 
+.audio-skip-btn,
+.audio-play-btn {
+    -webkit-tap-highlight-color: transparent; /* Removes the mobile tap highlight box */
+}
+
+.audio-skip-btn:focus,
+.audio-play-btn:focus {
+    outline: none; /* Removes the default desktop focus outline ring */
+}
+
 .audio-play-btn:hover {
     transform: scale(1.05);
 }
@@ -165,14 +176,9 @@
 }
 
 .audio-play-btn i {
-    /* Slight optical centering nudge for the play triangle */
     margin-left: 2px;
 }
 
-/* Paused state — solid white fill, dark icon (current default) */
-
-/* Playing state — inverted to an outlined ring with white icon,
-   so the button visually reflects "currently active" vs "tap to start" */
 .audio-play-btn.is-playing {
     background: transparent;
     border: 2px solid rgba(255, 255, 255, 0.85);
@@ -183,56 +189,6 @@
     margin-left: 0;
 }
 
-/* ── Volume — vertical, sits to the right of the player ──── */
-.audio-volume-col {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    height: 220px;
-    padding: 16px 0;
-    flex-shrink: 0;
-}
-
-.audio-volume-slider-vertical {
-    flex: 1;
-    -webkit-appearance: none;
-    appearance: none;
-    width: 3px;
-    border-radius: 2px;
-    background: rgba(255, 255, 255, 0.15);
-    cursor: pointer;
-    outline: none;
-    /* Rotate a horizontal range input into a vertical one */
-    writing-mode: vertical-lr;
-    direction: rtl;
-}
-
-.audio-volume-slider-vertical::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.85);
-    cursor: pointer;
-}
-
-.audio-volume-slider-vertical::-moz-range-thumb {
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.85);
-    border: none;
-    cursor: pointer;
-}
-
-.audio-volume-col i {
-    color: rgba(255, 255, 255, 0.4);
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-}
-
 /* ── Loading / error states ──────────────────────────────── */
 .audio-status {
     font-size: 12px;
@@ -240,6 +196,31 @@
     display: flex;
     align-items: center;
     gap: 6px;
+}
+
+/* ── Mobile adjustments ──────────────────────────────────── */
+@media (max-width: 480px) {
+    .audio-player {
+        padding: 24px 16px;
+    }
+
+    .audio-art {
+        width: 170px;
+        height: 170px;
+    }
+
+    .audio-art i {
+        width: 50px;
+        height: 50px;
+    }
+
+    .audio-main {
+        gap: 20px;
+    }
+
+    .audio-controls {
+        gap: 20px;
+    }
 }
 
 .audio-spinner {

@@ -722,7 +722,7 @@
 
         <div class="floating-controls" 
             x-data="{ uploading: false }" 
-            style="display: flex; flex-direction: column; align-items: flex-end; gap: 12px; position: fixed; bottom: 64px; right: 24px; z-index: 1000;">
+            x-show="viewer === null">
             
             <div class="upload-card-indicator" x-show="uploading" style="display: none;">
                 <div class="spinner"></div>

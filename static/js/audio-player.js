@@ -4,10 +4,11 @@
  * called via x-data="audioPlayerComponent()" in audio_player.html
  *
  * Handles:
- *  - Play/pause, seek, volume
- *  - Prev/next track navigation within current directory
- *  - Auto-advance on track end
- *  - Formatted time display
+ * - Play/pause, seek, volume
+ * - Prev/next track navigation within current directory
+ * - Auto-advance on track end
+ * - Formatted time display
+ * - Real-time rhythm/bass pulse tracking via Web Audio API
  */
 
 function audioPlayerComponent() {
@@ -20,6 +21,11 @@ function audioPlayerComponent() {
         duration: 0,
         volume: 1,
         seeking: false,
+
+        // ── Audio Analyzer State ─────────────────────────────────
+        audioCtx: null,
+        analyser: null,
+        dataArray: null,
 
         // ── Helpers ──────────────────────────────────────────────
         formatTime(secs) {
@@ -41,6 +47,15 @@ function audioPlayerComponent() {
 
         togglePlay() {
             if (!this.audioEl) return;
+
+            // Initialize context on first user interaction interaction
+            this.initAudioAnalyzer();
+
+            // Resume audio hardware context if suspended by browser security policy
+            if (this.audioCtx && this.audioCtx.state === 'suspended') {
+                this.audioCtx.resume();
+            }
+
             if (this.playing) {
                 this.audioEl.pause();
             } else {
@@ -151,6 +166,54 @@ function audioPlayerComponent() {
             return true;
         },
 
+        // ── Web Audio Rhythm Analyzer ────────────────────────────
+        initAudioAnalyzer() {
+            if (this.audioCtx) return; // Prevent creating multiple nodes on the same audio tag
+
+            try {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                this.audioCtx = new AudioContextClass();
+                
+                // Low fftSize means wider frequency bins—ideal for processing general rhythm/bass
+                this.analyser = this.audioCtx.createAnalyser();
+                this.analyser.fftSize = 64; 
+                
+                // Route element through analyzer node down to system output
+                const source = this.audioCtx.createMediaElementSource(this.audioEl);
+                source.connect(this.analyser);
+                this.analyser.connect(this.audioCtx.destination);
+
+                this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+                
+                // Start animation loop
+                this.animatePulse();
+            } catch (e) {
+                console.warn("Web Audio API could not initialize:", e);
+            }
+        },
+
+        animatePulse() {
+            if (this.playing && this.analyser && this.dataArray) {
+                this.analyser.getByteFrequencyData(this.dataArray);
+
+                // Isolate low frequencies (index 0, 1, 2 capture deep sub-bass and kick drums)
+                const bassSum = this.dataArray[0] + this.dataArray[1] + this.dataArray[2];
+                const bassAverage = bassSum / 3;
+
+                // Normalize scale mapping (ranges neatly from 1.0 up to 1.10)
+                const scale = 1 + (bassAverage / 255) * 0.10;
+
+                if (this.$refs.audioArt) {
+                    this.$refs.audioArt.style.transform = `scale(${scale})`;
+                }
+            } else if (!this.playing && this.$refs.audioArt) {
+                // Return smoothly to normal bounds when song ends or pauses
+                this.$refs.audioArt.style.transform = 'scale(1)';
+            }
+
+            requestAnimationFrame(() => this.animatePulse());
+        },
+
         // ── Lifecycle ────────────────────────────────────────────
         init() {
             this.loading = true;
@@ -163,7 +226,14 @@ function audioPlayerComponent() {
                 if (this.audioEl) {
                     this.audioEl.volume = this.volume;
                 }
+
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
             });
         },
     };
 }
+
+// Bind to window for global Alpine access
+window.audioPlayerComponent = audioPlayerComponent;

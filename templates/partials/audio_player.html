@@ -8,7 +8,6 @@
 #}
 <div class="audio-player" x-data="audioPlayerComponent()" x-init="init()">
 
-    <!-- Hidden native audio element — we drive it entirely via custom controls -->
     <audio x-ref="audioEl"
            :src="'/view?path=' + encodeURIComponent(viewer.path)"
            autoplay
@@ -22,15 +21,13 @@
     </audio>
 
     <div class="audio-main">
-        <!-- Artwork placeholder -->
-        <div class="audio-art" :class="{ 'is-playing': playing }">
+
+        <div x-ref="audioArt" class="audio-art" :class="{ 'is-playing': playing }">
             <i data-lucide="music-2"></i>
         </div>
 
-        <!-- Track title -->
         <div class="audio-title" x-text="viewer.name"></div>
 
-        <!-- Loading / error status -->
         <div class="audio-status" x-show="loading && !error">
             <div class="audio-spinner"></div>
             <span>Loading…</span>
@@ -40,7 +37,6 @@
             <span>Could not play this file</span>
         </div>
 
-        <!-- Seek bar -->
         <div class="audio-seek-row" x-show="!loading || duration > 0">
             <span class="audio-time" x-text="formatTime(currentTime)"></span>
             <input type="range"
@@ -56,34 +52,19 @@
             <span class="audio-time end" x-text="formatTime(duration)"></span>
         </div>
 
-        <!-- Transport controls -->
         <div class="audio-controls">
-            <button class="audio-skip-btn" @click="navigate(-1)" aria-label="Previous track">
+            <button class="audio-skip-btn" @click="navigate(-1, true)" aria-label="Previous track">
                 <i data-lucide="skip-back" style="width:20px;height:20px;"></i>
             </button>
 
             <button class="audio-play-btn" :class="{ 'is-playing': playing }" @click="togglePlay()" aria-label="Play/Pause">
-                <template x-if="!playing">
-                    <i data-lucide="play" style="width:22px;height:22px;"></i>
-                </template>
-                <template x-if="playing">
-                    <i data-lucide="pause" style="width:22px;height:22px;"></i>
-                </template>
+                <i data-lucide="play" x-show="!playing" style="width:22px;height:22px;"></i>
+                <i data-lucide="pause" x-show="playing" style="width:22px;height:22px;" x-cloak></i>
             </button>
 
-            <button class="audio-skip-btn" @click="navigate(1)" aria-label="Next track">
+            <button class="audio-skip-btn" @click="navigate(1, true)" aria-label="Next track">
                 <i data-lucide="skip-forward" style="width:20px;height:20px;"></i>
             </button>
         </div>
-    </div>
-
-    <!-- Volume — vertical column on the right -->
-    <div class="audio-volume-col">
-        <i data-lucide="volume-2"></i>
-        <input type="range"
-               class="audio-volume-slider-vertical"
-               min="0" max="1" step="0.01"
-               :value="volume"
-               @input="onVolumeInput($event)">
     </div>
 </div>
