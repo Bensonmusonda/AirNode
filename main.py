@@ -1,4 +1,5 @@
 import aiofiles
+import math
 import os
 import sys
 import shutil
@@ -231,9 +232,12 @@ def _render(request: Request, template: str, context: dict, status_code: int = 2
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     """Renders the PIN login page."""
+    client_key = request.client.host if request.client else "unknown"
+    lockout_remaining = check_login_lockout(client_key)
     return _render(request, "login.html", {
         "next_url": _next_url(request),
         "error": "",
+        "lockout_seconds": math.ceil(lockout_remaining) if lockout_remaining > 0 else 0,
     })
 
 
@@ -250,7 +254,8 @@ def login_submit(
     if lockout_remaining > 0:
         return _render(request, "login.html", {
             "next_url": next_url,
-            "error": f"Too many attempts. Try again in {int(lockout_remaining) + 1}s.",
+            "error": "",
+            "lockout_seconds": math.ceil(lockout_remaining),
         }, status_code=429)
 
     if not verify_pin(pin):
@@ -258,6 +263,7 @@ def login_submit(
         return _render(request, "login.html", {
             "next_url": next_url,
             "error": "That PIN did not match.",
+            "lockout_seconds": 0,
         })
 
     register_login_success(client_key)

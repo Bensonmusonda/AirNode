@@ -153,6 +153,12 @@ button {
     opacity: 0.92;
 }
 
+.auth-input:disabled,
+.auth-submit:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
 .connect-body {
     min-height: 100dvh;
     display: grid;
