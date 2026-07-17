@@ -39,6 +39,9 @@
                 renameName: '',
                 newFolderModal: false,
                 newFolderName: '',
+                resetPinModal: false,
+                resetPinResult: null,
+                resetPinLoading: false,
                 sortBy: localStorage.getItem('sortBy') || 'name-asc',
                 dropdownPage: 'main',
                 filterModal: false,
@@ -331,6 +334,44 @@
                         });
                 },
 
+                openResetPin() {
+                    this.resetPinResult = null;
+                    this.resetPinModal = true;
+                    this.settingsOpen = null;
+                    this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                },
+
+                confirmResetPin() {
+                    this.resetPinLoading = true;
+                    fetch('/reset-pin', { method: 'POST' })
+                        .then(async r => {
+                            if (r.ok) {
+                                const data = await r.json();
+                                this.resetPinResult = data.pin;
+                                this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                            } else {
+                                this.resetPinModal = false;
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Failed to reset PIN', type: 'error' } }));
+                            }
+                        })
+                        .catch(() => {
+                            this.resetPinModal = false;
+                            window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Failed to reset PIN', type: 'error' } }));
+                        })
+                        .finally(() => { this.resetPinLoading = false; });
+                },
+
+                copyNewPin() {
+                    if (!this.resetPinResult) return;
+                    navigator.clipboard.writeText(this.resetPinResult);
+                    window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'PIN copied', type: 'success' } }));
+                },
+
+                closeResetPin() {
+                    this.resetPinModal = false;
+                    this.resetPinResult = null;
+                },
+
                 sortFiles() {
                     const list = document.querySelector('.file-list');
                     if (!list) return;
@@ -599,6 +640,55 @@
                     <button class="modal-btn" x-on:click="newFolderModal = false">Cancel</button>
                     <button class="modal-btn primary" x-on:click="submitNewFolder()">Create</button>
                 </div>
+            </div>
+        </div>
+
+        <!-- Reset PIN Modal -->
+        <div class="modal-overlay"
+             x-show="resetPinModal"
+             x-on:keydown.escape.window="closeResetPin()"
+             style="display: none;"
+             x-transition>
+            <div class="modal-card" x-on:click.outside="closeResetPin()">
+                <template x-if="resetPinResult === null">
+                    <div style="display:flex; flex-direction:column; gap:14px;">
+                        <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                            <i data-lucide="key-round" style="stroke: var(--text-2); width:20px; height:20px;"></i>
+                            <h4 style="margin:0; font-size:15px; font-weight:600;">Reset PIN</h4>
+                        </div>
+                        <p style="font-size: 13px; color: var(--text-2); margin: 0; line-height: 1.5;">
+                            This generates a brand-new access PIN. Your current session stays logged in,
+                            but any other device will need the new PIN to log back in.
+                        </p>
+                        <div class="modal-actions">
+                            <button class="modal-btn" x-on:click="closeResetPin()">Cancel</button>
+                            <button class="modal-btn primary" x-on:click="confirmResetPin()" x-bind:disabled="resetPinLoading">
+                                <span x-show="!resetPinLoading">Generate New PIN</span>
+                                <span x-show="resetPinLoading">Generating…</span>
+                            </button>
+                        </div>
+                    </div>
+                </template>
+                <template x-if="resetPinResult !== null">
+                    <div style="display:flex; flex-direction:column; gap:14px;">
+                        <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                            <i data-lucide="circle-check-big" style="stroke: var(--text-2); width:20px; height:20px;"></i>
+                            <h4 style="margin:0; font-size:15px; font-weight:600;">New PIN Created</h4>
+                        </div>
+                        <p style="font-size: 13px; color: var(--text-2); margin: 0; line-height: 1.5;">
+                            Save this now — it will not be shown again.
+                        </p>
+                        <div style="display:flex; align-items:center; gap:8px; padding:12px 14px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius);">
+                            <span style="font-family: monospace; font-size:22px; letter-spacing:4px; color:var(--text); flex:1;" x-text="resetPinResult"></span>
+                            <button class="header-icon-btn" x-on:click="copyNewPin()" aria-label="Copy PIN">
+                                <i data-lucide="copy" style="width:16px;height:16px;"></i>
+                            </button>
+                        </div>
+                        <div class="modal-actions">
+                            <button class="modal-btn primary" x-on:click="closeResetPin()">Done</button>
+                        </div>
+                    </div>
+                </template>
             </div>
         </div>
 
@@ -872,6 +962,13 @@
                         <span>Lock</span>
                     </button>
                 </form>
+
+                <div class="dropdown-divider"></div>
+
+                <button class="dropdown-item" x-on:click="openResetPin()">
+                    <span class="dropdown-icon"><i data-lucide="key-round" style="width:14px;height:14px;"></i></span>
+                    <span>Reset PIN</span>
+                </button>
 
                 <div class="dropdown-divider"></div>
 

@@ -107,6 +107,28 @@ def register_login_success(client_key: str) -> None:
         _login_attempts.pop(client_key, None)
 
 
+def reset_pin() -> str:
+    """Generates a fresh PIN and salt while preserving the existing session
+    secret, so any browser/device that's already logged in stays logged in —
+    only new logins need the new PIN. Returns the new plaintext PIN, which
+    (like on first creation) is shown exactly once; only its salted hash is
+    persisted to disk."""
+    config = ensure_auth_config()
+    new_pin = f"{secrets.randbelow(1_000_000):06d}"
+    new_salt = secrets.token_urlsafe(24)
+    CONFIG_PATH.write_text(
+        json.dumps({
+            "pin_hash": _hash_pin(new_pin, new_salt),
+            "pin_salt": new_salt,
+            "session_secret": config.session_secret,
+        }, indent=2),
+        encoding="utf-8",
+    )
+    with _login_attempts_lock:
+        _login_attempts.clear()
+    return new_pin
+
+
 def create_session_token() -> str:
     config = ensure_auth_config()
     expires_at = str(int(time.time()) + SESSION_MAX_AGE_SECONDS)

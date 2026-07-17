@@ -27,6 +27,7 @@ from airnode_auth import (
     ensure_auth_config,
     register_login_failure,
     register_login_success,
+    reset_pin,
     verify_pin,
     verify_session_token,
 )
@@ -277,6 +278,17 @@ def logout():
     response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie(COOKIE_NAME)
     return response
+
+
+@app.post("/reset-pin")
+def reset_pin_route():
+    """Generates a new PIN for a logged-in user who forgot the old one.
+    The current session (and any other device already logged in) stays
+    valid — only future logins need the new PIN. Gated purely by the auth
+    middleware: reaching this route already proves prior authentication,
+    so no extra confirmation is required here."""
+    new_pin = reset_pin()
+    return JSONResponse({"pin": new_pin})
 
 
 @app.get("/", response_class=HTMLResponse)
