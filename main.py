@@ -22,8 +22,11 @@ import time
 from airnode_auth import (
     COOKIE_NAME,
     SESSION_MAX_AGE_SECONDS,
+    check_login_lockout,
     create_session_token,
     ensure_auth_config,
+    register_login_failure,
+    register_login_success,
     verify_pin,
     verify_session_token,
 )
@@ -33,7 +36,16 @@ app = FastAPI(title="AirNode")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
-ensure_auth_config()
+
+# NOTE: this runs even when main.py is launched directly (e.g. a bare
+# `uvicorn main:app --reload`, as the README's Development section suggests)
+# rather than through airnode_server.py. In that path nothing else prints
+# the PIN, so we print it here too on first creation to avoid a silent
+# lockout with no way to learn the PIN short of deleting the config file.
+_auth_config = ensure_auth_config()
+if _auth_config.created_pin:
+    print(f"AirNode access PIN: {_auth_config.created_pin}")
+    print("Save this PIN now; it will not be shown again. Delete .airnode-auth.json to reset it.")
 
 
 PUBLIC_PATHS = {"/login", "/favicon.ico"}
@@ -206,9 +218,9 @@ def scan_directory(target: Path) -> list[dict]:
         })
     return entries
 
-def _render(request: Request, template: str, context: dict):
+def _render(request: Request, template: str, context: dict, status_code: int = 200):
     """Utility helper to render templates with consistent request contexts."""
-    return templates.TemplateResponse(request=request, name=template, context=context)
+    return templates.TemplateResponse(request=request, name=template, context=context, status_code=status_code)
 
 
 # ==============================================================================
@@ -231,12 +243,23 @@ def login_submit(
     next_url: str = Form("/"),
 ):
     """Authenticates with the local AirNode PIN and sets a signed session."""
+    client_key = request.client.host if request.client else "unknown"
+
+    lockout_remaining = check_login_lockout(client_key)
+    if lockout_remaining > 0:
+        return _render(request, "login.html", {
+            "next_url": next_url,
+            "error": f"Too many attempts. Try again in {int(lockout_remaining) + 1}s.",
+        }, status_code=429)
+
     if not verify_pin(pin):
+        register_login_failure(client_key)
         return _render(request, "login.html", {
             "next_url": next_url,
             "error": "That PIN did not match.",
         })
 
+    register_login_success(client_key)
     redirect_to = next_url if next_url.startswith("/") and not next_url.startswith("//") else "/"
     response = RedirectResponse(url=redirect_to, status_code=303)
     response.set_cookie(
