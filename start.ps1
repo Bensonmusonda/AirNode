@@ -3,8 +3,8 @@
     Start the AirNode server in the background (no console window).
 
 .DESCRIPTION
-    Launches uvicorn with the AirNode FastAPI application bound to all
-    network interfaces so that devices on the local hotspot can reach it.
+    Launches the AirNode server bound to all network interfaces and advertises
+    it on the local network as airnode.local when mDNS/Bonjour is available.
     Writes stdout/stderr to airnode.log and saves the uvicorn process ID
     to airnode.pid so the companion stop script can terminate it cleanly.
 
@@ -34,8 +34,8 @@ if (Test-Path $PidFile) {
     Remove-Item $PidFile -Force
 }
 
-# Launch uvicorn directly (not via cmd.exe) so -PassThru gives us the
-# real uvicorn process ID rather than a transient cmd.exe wrapper PID.
+# Launch the AirNode server directly (not via cmd.exe) so -PassThru gives us
+# the real Python process ID rather than a transient cmd.exe wrapper PID.
 # stdout/stderr are each redirected to separate temp files then the log
 # is tail-merged; PowerShell's Start-Process cannot redirect both to the
 # same file in one call so we redirect stderr to <log>.err and let the
@@ -44,7 +44,7 @@ $ErrLog = $LogFile + ".err"
 
 $Process = Start-Process `
     -FilePath               $Python `
-    -ArgumentList           "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000" `
+    -ArgumentList           "airnode_server.py", "--host", "0.0.0.0", "--port", "8000" `
     -WorkingDirectory       $ProjectRoot `
     -RedirectStandardOutput $LogFile `
     -RedirectStandardError  $ErrLog `
@@ -54,6 +54,7 @@ $Process = Start-Process `
 $Process.Id | Out-File -FilePath $PidFile -Encoding ascii -NoNewline
 
 Write-Host "AirNode started (PID $($Process.Id))." -ForegroundColor Green
+Write-Host "Try  : http://airnode.local:8000"
 Write-Host "Log  : $LogFile"
 Write-Host "Err  : $ErrLog"
 Write-Host "Stop : .\stop.ps1"

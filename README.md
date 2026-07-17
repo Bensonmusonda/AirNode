@@ -12,6 +12,7 @@ AirNode exposes your PC's file system as a fast, browsable web interface reachab
 
 Key capabilities:
 - Full directory tree navigation
+- Local network discovery at `http://airnode.local:8000` via mDNS / Bonjour
 - Instant client-side file filtering
 - File downloads with correct MIME disposition
 - Inline media viewer (images, video, audio, PDF, plain text)
@@ -57,12 +58,20 @@ This creates a `.venv/` virtual environment and installs all production dependen
 ### Access from another device
 
 1. Connect your PC to a phone hotspot (or any shared Wi-Fi).
-2. Find the IP address your PC was assigned:
+2. On your phone or another device, try:
+   ```text
+   http://airnode.local:8000
+   ```
+3. If that does not resolve on your device, use the fallback LAN URL written to
+   `airnode.log` when the server starts, or find the IP address your PC was assigned:
    ```powershell
    ipconfig
    ```
    Look for the adapter connected to your hotspot (e.g., `192.168.43.x`).
-3. On your phone, open: `http://<PC-IP>:8000`
+4. On your phone, open: `http://<PC-IP>:8000`
+
+`airnode.local` uses mDNS / Bonjour. It works well on iPhone, macOS, and many
+Android devices; the numeric IP address remains the reliable fallback.
 
 ---
 
@@ -89,6 +98,7 @@ To remove the autostart entry:
 ```
 AirNode/
 ├── main.py                   # FastAPI application
+├── airnode_server.py         # Server launcher with LAN discovery
 ├── requirements.txt          # Production dependencies
 ├── setup.ps1                 # One-time venv + dependency install
 ├── start.ps1                 # Start server in the background
@@ -127,6 +137,12 @@ Run with hot-reload during development:
 
 ```powershell
 .venv\Scripts\uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Run the normal server launcher with LAN discovery:
+
+```powershell
+.venv\Scripts\python.exe airnode_server.py --host 0.0.0.0 --port 8000
 ```
 
 ## License
