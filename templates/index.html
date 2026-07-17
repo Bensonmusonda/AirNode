@@ -866,6 +866,15 @@
 
                 <div class="dropdown-divider"></div>
 
+                <form method="post" action="/logout">
+                    <button class="dropdown-item" type="submit">
+                        <span class="dropdown-icon"><i data-lucide="log-out" style="width:14px;height:14px;"></i></span>
+                        <span>Lock</span>
+                    </button>
+                </form>
+
+                <div class="dropdown-divider"></div>
+
                 <button class="dropdown-item" x-on:click="settingsOpen = null">
                     <span class="dropdown-icon"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i></span>
                     <span>Refresh Index</span>

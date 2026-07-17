@@ -9,20 +9,67 @@ import json
 import traceback
 import zipfile
 import io
+from urllib.parse import quote
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi import UploadFile, Form, File
 from fastapi.concurrency import run_in_threadpool
 import time
+
+from airnode_auth import (
+    COOKIE_NAME,
+    SESSION_MAX_AGE_SECONDS,
+    create_session_token,
+    ensure_auth_config,
+    verify_pin,
+    verify_session_token,
+)
 
 
 app = FastAPI(title="AirNode")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+ensure_auth_config()
+
+
+PUBLIC_PATHS = {"/login", "/favicon.ico"}
+PUBLIC_PREFIXES = ("/static/",)
+
+
+def _next_url(request: Request) -> str:
+    next_url = request.query_params.get("next", "/")
+    return next_url if next_url.startswith("/") and not next_url.startswith("//") else "/"
+
+
+def _login_redirect(request: Request) -> RedirectResponse:
+    current = request.url.path
+    if request.url.query:
+        current = f"{current}?{request.url.query}"
+    return RedirectResponse(url=f"/login?next={quote(current, safe='')}", status_code=303)
+
+
+@app.middleware("http")
+async def require_authentication(request: Request, call_next):
+    path = request.url.path
+    if path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    if verify_session_token(request.cookies.get(COOKIE_NAME)):
+        return await call_next(request)
+
+    if request.headers.get("HX-Request"):
+        return Response(
+            "Authentication required.",
+            status_code=401,
+            headers={"HX-Redirect": "/login"},
+        )
+    if path.startswith("/api/"):
+        return JSONResponse(status_code=401, content={"detail": "Authentication required."})
+    return _login_redirect(request)
 
 
 # ==============================================================================
@@ -167,6 +214,47 @@ def _render(request: Request, template: str, context: dict):
 # ==============================================================================
 # HTTP Routes and Endpoints
 # ==============================================================================
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    """Renders the PIN login page."""
+    return _render(request, "login.html", {
+        "next_url": _next_url(request),
+        "error": "",
+    })
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login_submit(
+    request: Request,
+    pin: str = Form(...),
+    next_url: str = Form("/"),
+):
+    """Authenticates with the local AirNode PIN and sets a signed session."""
+    if not verify_pin(pin):
+        return _render(request, "login.html", {
+            "next_url": next_url,
+            "error": "That PIN did not match.",
+        })
+
+    redirect_to = next_url if next_url.startswith("/") and not next_url.startswith("//") else "/"
+    response = RedirectResponse(url=redirect_to, status_code=303)
+    response.set_cookie(
+        COOKIE_NAME,
+        create_session_token(),
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/logout")
+def logout():
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(COOKIE_NAME)
+    return response
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):

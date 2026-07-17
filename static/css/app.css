@@ -66,6 +66,93 @@ button {
     font-family: inherit;
 }
 
+.auth-body {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+}
+
+.auth-page {
+    width: min(100%, 360px);
+}
+
+.auth-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    padding: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
+.auth-header {
+    display: grid;
+    gap: 6px;
+}
+
+.auth-wordmark {
+    color: var(--text-2);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.auth-header h1 {
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.auth-form {
+    display: grid;
+    gap: 12px;
+}
+
+.auth-label {
+    color: var(--text-2);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.auth-input {
+    width: 100%;
+    height: 42px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 18px;
+    letter-spacing: 0;
+    padding: 0 12px;
+}
+
+.auth-input:focus {
+    outline: 2px solid var(--border-deep);
+    outline-offset: 2px;
+}
+
+.auth-error {
+    color: var(--danger);
+    font-size: 13px;
+}
+
+.auth-submit {
+    height: 40px;
+    border: 1px solid var(--border-deep);
+    border-radius: var(--radius-sm);
+    background: var(--text);
+    color: var(--surface);
+    font-weight: 600;
+}
+
+.auth-submit:hover {
+    opacity: 0.92;
+}
+
 .connect-body {
     min-height: 100dvh;
     display: grid;

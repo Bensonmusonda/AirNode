@@ -5,6 +5,8 @@ import socket
 from contextlib import AbstractContextManager
 from pathlib import Path
 
+from airnode_auth import ensure_auth_config
+
 try:
     from zeroconf import IPVersion, ServiceInfo, Zeroconf
 except ImportError:  # pragma: no cover - exercised only when deps are missing
@@ -99,6 +101,13 @@ class MdnsAdvertisement(AbstractContextManager):
 
 def print_access_urls(advertisement: MdnsAdvertisement) -> None:
     print("AirNode is starting.")
+    access_pin = os.environ.get("AIRNODE_CREATED_PIN")
+    if access_pin:
+        print(f"Access PIN: {access_pin}")
+        print("Save this PIN; it is shown only when the auth config is created.")
+    else:
+        print("Access gate: enabled.")
+
     if advertisement.mdns_url:
         print(f"Local network name: {advertisement.mdns_url}")
     elif advertisement.mdns_error:
@@ -163,6 +172,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    auth_config = ensure_auth_config()
+    if auth_config.created_pin:
+        os.environ["AIRNODE_CREATED_PIN"] = auth_config.created_pin
+
     import uvicorn
 
     with MdnsAdvertisement(port=args.port, enabled=not args.no_mdns) as advertisement:

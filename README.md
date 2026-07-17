@@ -14,6 +14,7 @@ Key capabilities:
 - Full directory tree navigation
 - Local network discovery at `http://airnode.local:8000` via mDNS / Bonjour
 - QR code connection page for phone access without typing the LAN IP
+- Local PIN access gate with signed browser sessions
 - Instant client-side file filtering
 - File downloads with correct MIME disposition
 - Inline media viewer (images, video, audio, PDF, plain text)
@@ -55,6 +56,10 @@ This creates a `.venv/` virtual environment and installs all production dependen
 
 `start.ps1` writes stdout to `airnode.log`, stderr (uvicorn startup messages and errors) to `airnode.log.err`, and the process ID to `airnode.pid`.  
 `stop.ps1` reads the PID file and terminates the process cleanly.
+
+On first run, AirNode creates `.airnode-auth.json` and prints a six-digit access
+PIN to `airnode.log`. Keep that PIN for phones and other local devices. To reset
+the PIN, stop AirNode, delete `.airnode-auth.json`, then start AirNode again.
 
 ### Access from another device
 
@@ -131,6 +136,9 @@ AirNode/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Full-page index |
+| `GET` | `/login` | PIN login page |
+| `POST` | `/login` | Create a signed browser session |
+| `POST` | `/logout` | Clear the browser session |
 | `GET` | `/connect` | QR code and LAN URLs for connecting another device |
 | `GET` | `/browse?path=<p>` | Directory listing (HTMX partial or full page) |
 | `GET` | `/download?path=<p>` | Download file as attachment |
