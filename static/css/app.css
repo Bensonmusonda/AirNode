@@ -66,6 +66,195 @@ button {
     font-family: inherit;
 }
 
+.auth-body {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+}
+
+.auth-page {
+    width: min(100%, 360px);
+}
+
+.auth-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    padding: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
+.auth-header {
+    display: grid;
+    gap: 6px;
+}
+
+.auth-wordmark {
+    color: var(--text-2);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.auth-header h1 {
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.auth-form {
+    display: grid;
+    gap: 12px;
+}
+
+.auth-label {
+    color: var(--text-2);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.auth-input {
+    width: 100%;
+    height: 42px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 18px;
+    letter-spacing: 0;
+    padding: 0 12px;
+}
+
+.auth-input:focus {
+    outline: 2px solid var(--border-deep);
+    outline-offset: 2px;
+}
+
+.auth-error {
+    color: var(--danger);
+    font-size: 13px;
+}
+
+.auth-submit {
+    height: 40px;
+    border: 1px solid var(--border-deep);
+    border-radius: var(--radius-sm);
+    background: var(--text);
+    color: var(--surface);
+    font-weight: 600;
+}
+
+.auth-submit:hover {
+    opacity: 0.92;
+}
+
+.connect-body {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+}
+
+.connect-page {
+    width: min(100%, 420px);
+}
+
+.connect-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 22px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
+.connect-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.connect-header h1 {
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.connect-back {
+    color: var(--text-2);
+    font-size: 13px;
+}
+
+.connect-back:hover {
+    color: var(--text);
+}
+
+.connect-qr-frame {
+    display: grid;
+    place-items: center;
+    padding: 18px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.connect-qr {
+    width: min(100%, 280px);
+    aspect-ratio: 1;
+    display: block;
+}
+
+.connect-primary {
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+
+.connect-empty {
+    color: var(--text-2);
+    text-align: center;
+}
+
+.connect-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+}
+
+.connect-list div {
+    display: grid;
+    gap: 2px;
+}
+
+.connect-list span {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.connect-list a {
+    color: var(--text);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.connect-list a:hover {
+    text-decoration: underline;
+}
+
 .layout {
     display: flex;
     flex-direction: column;
@@ -90,6 +279,26 @@ button {
     font-weight: 600;
     letter-spacing: -0.01em;
     flex-shrink: 0;
+}
+
+.header-icon-btn {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    transition: background 0.12s, color 0.12s;
+}
+
+.header-icon-btn:hover,
+.header-icon-btn:focus-visible {
+    background: var(--active);
+    color: var(--text);
 }
 
 /* ── Path Bar ──────────────────────────────────────────────── */

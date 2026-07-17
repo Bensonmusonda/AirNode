@@ -12,6 +12,9 @@ AirNode exposes your PC's file system as a fast, browsable web interface reachab
 
 Key capabilities:
 - Full directory tree navigation
+- Local network discovery at `http://airnode.local:8000` via mDNS / Bonjour
+- QR code connection page for phone access without typing the LAN IP
+- Local PIN access gate with signed browser sessions
 - Instant client-side file filtering
 - File downloads with correct MIME disposition
 - Inline media viewer (images, video, audio, PDF, plain text)
@@ -54,15 +57,33 @@ This creates a `.venv/` virtual environment and installs all production dependen
 `start.ps1` writes stdout to `airnode.log`, stderr (uvicorn startup messages and errors) to `airnode.log.err`, and the process ID to `airnode.pid`.  
 `stop.ps1` reads the PID file and terminates the process cleanly.
 
+On first run, AirNode creates `.airnode-auth.json` and prints a six-digit access
+PIN to `airnode.log`. Keep that PIN for phones and other local devices. To reset
+the PIN, stop AirNode, delete `.airnode-auth.json`, then start AirNode again.
+
 ### Access from another device
 
 1. Connect your PC to a phone hotspot (or any shared Wi-Fi).
-2. Find the IP address your PC was assigned:
+2. On the PC running AirNode, open:
+   ```text
+   http://localhost:8000/connect
+   ```
+   Then scan the QR code with your phone. The QR code uses the detected numeric
+   LAN URL because that is the most reliable option across phones.
+3. You can also try the local network name directly:
+   ```text
+   http://airnode.local:8000
+   ```
+4. If that does not resolve on your device, use the fallback LAN URL written to
+   `airnode.log` when the server starts, or find the IP address your PC was assigned:
    ```powershell
    ipconfig
    ```
    Look for the adapter connected to your hotspot (e.g., `192.168.43.x`).
-3. On your phone, open: `http://<PC-IP>:8000`
+5. On your phone, open: `http://<PC-IP>:8000`
+
+`airnode.local` uses mDNS / Bonjour. It works well on iPhone, macOS, and many
+Android devices; the numeric IP address remains the reliable fallback.
 
 ---
 
@@ -89,6 +110,7 @@ To remove the autostart entry:
 ```
 AirNode/
 ├── main.py                   # FastAPI application
+├── airnode_server.py         # Server launcher with LAN discovery
 ├── requirements.txt          # Production dependencies
 ├── setup.ps1                 # One-time venv + dependency install
 ├── start.ps1                 # Start server in the background
@@ -114,6 +136,10 @@ AirNode/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Full-page index |
+| `GET` | `/login` | PIN login page |
+| `POST` | `/login` | Create a signed browser session |
+| `POST` | `/logout` | Clear the browser session |
+| `GET` | `/connect` | QR code and LAN URLs for connecting another device |
 | `GET` | `/browse?path=<p>` | Directory listing (HTMX partial or full page) |
 | `GET` | `/download?path=<p>` | Download file as attachment |
 | `GET` | `/view?path=<p>` | Serve file inline with range support |
@@ -127,6 +153,12 @@ Run with hot-reload during development:
 
 ```powershell
 .venv\Scripts\uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Run the normal server launcher with LAN discovery:
+
+```powershell
+.venv\Scripts\python.exe airnode_server.py --host 0.0.0.0 --port 8000
 ```
 
 ## License

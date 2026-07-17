@@ -441,7 +441,11 @@
                 </div>
             </nav>
 
-            <button class="row-menu-btn" x-on:click.stop="
+            <a class="header-icon-btn" href="/connect" aria-label="Show connection QR code">
+                <i data-lucide="qr-code" style="width:18px;height:18px;"></i>
+            </a>
+
+            <button class="header-icon-btn" x-on:click.stop="
                         const rect = $el.getBoundingClientRect();
                         settingsOpen = { x: rect.right - 200, y: rect.bottom + 6 };
                     " aria-label="Open menu">
@@ -859,6 +863,15 @@
                     </span>
                     <span style="flex:1" x-text="darkMode ? 'Light Theme' : 'Dark Theme'"></span>
                 </button>
+
+                <div class="dropdown-divider"></div>
+
+                <form method="post" action="/logout">
+                    <button class="dropdown-item" type="submit">
+                        <span class="dropdown-icon"><i data-lucide="log-out" style="width:14px;height:14px;"></i></span>
+                        <span>Lock</span>
+                    </button>
+                </form>
 
                 <div class="dropdown-divider"></div>
 

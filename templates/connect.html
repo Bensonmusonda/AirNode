@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Connect to AirNode</title>
+    <meta name="description" content="Scan a QR code to open AirNode on another local device." />
+    <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+
+<body class="connect-body">
+    <main class="connect-page">
+        <section class="connect-panel">
+            <div class="connect-header">
+                <a class="connect-back" href="/">Back</a>
+                <h1>Connect to AirNode</h1>
+            </div>
+
+            {% if qr_path and qr_url %}
+            <div class="connect-qr-frame">
+                <img class="connect-qr" src="{{ qr_path }}" alt="QR code for {{ qr_url }}" />
+            </div>
+            <p class="connect-primary">{{ qr_url }}</p>
+            {% elif qr_error %}
+            <p class="connect-empty">QR code unavailable: {{ qr_error }}</p>
+            {% else %}
+            <p class="connect-empty">No LAN address was detected yet.</p>
+            {% endif %}
+
+            <div class="connect-list">
+                {% if primary_url %}
+                <div>
+                    <span>Recommended</span>
+                    <a href="{{ primary_url }}">{{ primary_url }}</a>
+                </div>
+                {% endif %}
+
+                {% if mdns_url %}
+                <div>
+                    <span>Local name</span>
+                    <a href="{{ mdns_url }}">{{ mdns_url }}</a>
+                </div>
+                {% endif %}
+
+                {% for url in lan_urls %}
+                {% if url != primary_url %}
+                <div>
+                    <span>Fallback</span>
+                    <a href="{{ url }}">{{ url }}</a>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+    </main>
+</body>
+
+</html>

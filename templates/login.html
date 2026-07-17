@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Unlock AirNode</title>
+    <meta name="description" content="Enter the local AirNode PIN to continue." />
+    <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+
+<body class="auth-body">
+    <main class="auth-page">
+        <section class="auth-panel">
+            <div class="auth-header">
+                <span class="auth-wordmark">AirNode</span>
+                <h1>Enter PIN</h1>
+            </div>
+
+            <form class="auth-form" method="post" action="/login" autocomplete="off">
+                <input type="hidden" name="next_url" value="{{ next_url }}" />
+                <label class="auth-label" for="pin">Access PIN</label>
+                <input
+                    id="pin"
+                    class="auth-input"
+                    name="pin"
+                    type="password"
+                    inputmode="numeric"
+                    pattern="[0-9]*"
+                    autofocus
+                    required
+                />
+                {% if error %}
+                <p class="auth-error">{{ error }}</p>
+                {% endif %}
+                <button class="auth-submit" type="submit">Unlock</button>
+            </form>
+        </section>
+    </main>
+</body>
+
+</html>

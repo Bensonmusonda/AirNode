@@ -12,6 +12,8 @@ __pycache__/
 airnode.pid
 airnode.log
 airnode.log.err
+static/generated/
+.airnode-auth.json
 
 
 # Environment variables
