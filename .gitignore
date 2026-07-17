@@ -12,6 +12,7 @@ __pycache__/
 airnode.pid
 airnode.log
 airnode.log.err
+static/generated/
 
 
 # Environment variables

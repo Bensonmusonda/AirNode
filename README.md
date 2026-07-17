@@ -13,6 +13,7 @@ AirNode exposes your PC's file system as a fast, browsable web interface reachab
 Key capabilities:
 - Full directory tree navigation
 - Local network discovery at `http://airnode.local:8000` via mDNS / Bonjour
+- QR code connection page for phone access without typing the LAN IP
 - Instant client-side file filtering
 - File downloads with correct MIME disposition
 - Inline media viewer (images, video, audio, PDF, plain text)
@@ -58,17 +59,23 @@ This creates a `.venv/` virtual environment and installs all production dependen
 ### Access from another device
 
 1. Connect your PC to a phone hotspot (or any shared Wi-Fi).
-2. On your phone or another device, try:
+2. On the PC running AirNode, open:
+   ```text
+   http://localhost:8000/connect
+   ```
+   Then scan the QR code with your phone. The QR code uses the detected numeric
+   LAN URL because that is the most reliable option across phones.
+3. You can also try the local network name directly:
    ```text
    http://airnode.local:8000
    ```
-3. If that does not resolve on your device, use the fallback LAN URL written to
+4. If that does not resolve on your device, use the fallback LAN URL written to
    `airnode.log` when the server starts, or find the IP address your PC was assigned:
    ```powershell
    ipconfig
    ```
    Look for the adapter connected to your hotspot (e.g., `192.168.43.x`).
-4. On your phone, open: `http://<PC-IP>:8000`
+5. On your phone, open: `http://<PC-IP>:8000`
 
 `airnode.local` uses mDNS / Bonjour. It works well on iPhone, macOS, and many
 Android devices; the numeric IP address remains the reliable fallback.
@@ -124,6 +131,7 @@ AirNode/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Full-page index |
+| `GET` | `/connect` | QR code and LAN URLs for connecting another device |
 | `GET` | `/browse?path=<p>` | Directory listing (HTMX partial or full page) |
 | `GET` | `/download?path=<p>` | Download file as attachment |
 | `GET` | `/view?path=<p>` | Serve file inline with range support |

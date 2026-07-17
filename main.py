@@ -190,6 +190,26 @@ async def index(request: Request):
     })
 
 
+@app.get("/connect", response_class=HTMLResponse)
+def connect(request: Request):
+    """Displays connection details and a QR code for phone access."""
+    try:
+        lan_urls = json.loads(os.environ.get("AIRNODE_LAN_URLS", "[]"))
+    except json.JSONDecodeError:
+        lan_urls = []
+
+    primary_url = os.environ.get("AIRNODE_PRIMARY_URL") or (lan_urls[0] if lan_urls else "")
+
+    return _render(request, "connect.html", {
+        "primary_url": primary_url,
+        "lan_urls": lan_urls,
+        "mdns_url": os.environ.get("AIRNODE_MDNS_URL", ""),
+        "qr_url": os.environ.get("AIRNODE_QR_URL", primary_url),
+        "qr_path": os.environ.get("AIRNODE_QR_PATH", ""),
+        "qr_error": os.environ.get("AIRNODE_QR_ERROR", ""),
+    })
+
+
 # === HTMX Directory Browsing ===
 
 @app.get("/browse", response_class=HTMLResponse)

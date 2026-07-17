@@ -1,6 +1,9 @@
 import argparse
+import json
+import os
 import socket
 from contextlib import AbstractContextManager
+from pathlib import Path
 
 try:
     from zeroconf import IPVersion, ServiceInfo, Zeroconf
@@ -13,6 +16,8 @@ except ImportError:  # pragma: no cover - exercised only when deps are missing
 SERVICE_TYPE = "_http._tcp.local."
 SERVICE_NAME = "AirNode._http._tcp.local."
 HOSTNAME = "airnode.local."
+GENERATED_STATIC_DIR = Path(__file__).resolve().parent / "static" / "generated"
+QR_FILENAME = "airnode-qr.svg"
 
 
 def get_lan_ipv4_addresses() -> list[str]:
@@ -110,6 +115,39 @@ def print_access_urls(advertisement: MdnsAdvertisement) -> None:
     else:
         print("LAN fallback URLs: none detected yet.")
 
+    if os.environ.get("AIRNODE_QR_URL"):
+        print("QR code page: http://localhost:%s/connect" % advertisement.port)
+        print("QR target: %s" % os.environ["AIRNODE_QR_URL"])
+    elif os.environ.get("AIRNODE_QR_ERROR"):
+        print("QR code: unavailable (%s)." % os.environ["AIRNODE_QR_ERROR"])
+
+
+def generate_qr_svg(url: str) -> str | None:
+    """Generate a QR SVG for the URL and return the static asset path."""
+    try:
+        import qrcode
+        import qrcode.image.svg
+    except ImportError:
+        os.environ["AIRNODE_QR_ERROR"] = "qrcode is not installed"
+        return None
+
+    GENERATED_STATIC_DIR.mkdir(parents=True, exist_ok=True)
+    qr_path = GENERATED_STATIC_DIR / QR_FILENAME
+    image = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage)
+    image.save(qr_path)
+    return f"/static/generated/{QR_FILENAME}"
+
+
+def publish_connection_details(advertisement: MdnsAdvertisement) -> None:
+    primary_url = advertisement.urls[0] if advertisement.urls else ""
+    qr_path = generate_qr_svg(primary_url) if primary_url else None
+
+    os.environ["AIRNODE_LAN_URLS"] = json.dumps(advertisement.urls)
+    os.environ["AIRNODE_PRIMARY_URL"] = primary_url
+    os.environ["AIRNODE_MDNS_URL"] = advertisement.mdns_url or ""
+    os.environ["AIRNODE_QR_URL"] = primary_url
+    os.environ["AIRNODE_QR_PATH"] = qr_path or ""
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AirNode with LAN discovery.")
@@ -128,6 +166,7 @@ def main() -> None:
     import uvicorn
 
     with MdnsAdvertisement(port=args.port, enabled=not args.no_mdns) as advertisement:
+        publish_connection_details(advertisement)
         print_access_urls(advertisement)
         uvicorn.run("main:app", host=args.host, port=args.port)
 

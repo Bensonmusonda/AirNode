@@ -55,6 +55,7 @@ $Process.Id | Out-File -FilePath $PidFile -Encoding ascii -NoNewline
 
 Write-Host "AirNode started (PID $($Process.Id))." -ForegroundColor Green
 Write-Host "Try  : http://airnode.local:8000"
+Write-Host "Scan : http://localhost:8000/connect"
 Write-Host "Log  : $LogFile"
 Write-Host "Err  : $ErrLog"
 Write-Host "Stop : .\stop.ps1"
