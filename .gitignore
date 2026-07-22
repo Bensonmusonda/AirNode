@@ -14,6 +14,8 @@ airnode.log
 airnode.log.err
 static/generated/
 .airnode-auth.json
+.airnode_upload_temp/
+
 
 
 # Environment variables

@@ -475,6 +475,273 @@ async def download_batch(paths: str):
         headers={"Content-Disposition": 'attachment; filename="archive.zip"'}
     )
 
+UPLOAD_TEMP_DIR = Path(__file__).parent.resolve() / ".airnode_upload_temp"
+UPLOAD_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+def cleanup_expired_upload_sessions(ttl_hours: int = 24):
+    """Purges incomplete chunk upload sessions older than ttl_hours."""
+    if not UPLOAD_TEMP_DIR.exists():
+        return
+    now = time.time()
+    cutoff = now - (ttl_hours * 3600)
+    try:
+        for session_dir in UPLOAD_TEMP_DIR.iterdir():
+            if session_dir.is_dir():
+                meta_file = session_dir / "session.json"
+                updated_at = 0
+                if meta_file.exists():
+                    try:
+                        with open(meta_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            updated_at = data.get("updated_at", 0)
+                    except Exception:
+                        pass
+                else:
+                    updated_at = session_dir.stat().st_mtime
+                
+                if updated_at < cutoff:
+                    try:
+                        shutil.rmtree(session_dir)
+                    except Exception as e:
+                        print(f"[AirNode Cleanup Error] Failed to delete expired session {session_dir.name}: {e}")
+    except Exception as e:
+        print(f"[AirNode Cleanup Error] Iteration failed: {e}")
+
+def sanitize_file_id(file_id: str) -> str:
+    """Sanitizes file_id for safe use as a directory name."""
+    clean = "".join(c for c in file_id if c.isalnum() or c in ("-", "_")).strip()
+    return clean if clean else "default_upload_session"
+
+@app.post("/upload/init")
+async def upload_init(
+    filename: str = Form(...),
+    file_size: int = Form(...),
+    target_path: str = Form(""),
+    file_id: str = Form(...),
+    total_chunks: int = Form(...),
+    force_overwrite: str = Form("false")
+):
+    cleanup_expired_upload_sessions()
+
+    cleaned_path_str = target_path.strip()
+    target_dir = resolve_target(cleaned_path_str) if cleaned_path_str and cleaned_path_str != "undefined" else None
+    if target_dir is None:
+        target_dir = ROOTS[0] if ROOTS else Path("C:/")
+
+    if not is_path_allowed(target_dir):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target_dir.exists() or not target_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Target folder does not exist.")
+
+    safe_filename = Path(filename).name
+    destination = target_dir / safe_filename
+
+    # Check collision
+    if destination.exists() and force_overwrite != "true":
+        return JSONResponse({
+            "collision": True,
+            "filename": safe_filename,
+            "resumed": False,
+            "received_chunks": []
+        })
+
+    safe_id = sanitize_file_id(file_id)
+    session_dir = UPLOAD_TEMP_DIR / safe_id
+    session_file = session_dir / "session.json"
+
+    if session_dir.exists() and session_file.exists():
+        try:
+            async with aiofiles.open(session_file, "r", encoding="utf-8") as f:
+                content = await f.read()
+                session_data = json.loads(content)
+
+            received_chunks = []
+            for item in session_dir.iterdir():
+                if item.name.startswith("chunk_"):
+                    try:
+                        idx = int(item.name.split("_")[1])
+                        received_chunks.append(idx)
+                    except ValueError:
+                        pass
+
+            received_chunks.sort()
+            session_data["updated_at"] = time.time()
+            async with aiofiles.open(session_file, "w", encoding="utf-8") as f:
+                await f.write(json.dumps(session_data))
+
+            return JSONResponse({
+                "collision": False,
+                "resumed": True,
+                "file_id": safe_id,
+                "received_chunks": received_chunks,
+                "filename": safe_filename
+            })
+        except Exception:
+            pass
+
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_data = {
+        "file_id": safe_id,
+        "filename": safe_filename,
+        "target_path": str(target_dir),
+        "file_size": file_size,
+        "total_chunks": total_chunks,
+        "created_at": time.time(),
+        "updated_at": time.time()
+    }
+    async with aiofiles.open(session_file, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(session_data))
+
+    return JSONResponse({
+        "collision": False,
+        "resumed": False,
+        "file_id": safe_id,
+        "received_chunks": [],
+        "filename": safe_filename
+    })
+
+@app.post("/upload/chunk")
+async def upload_chunk(
+    file_id: str = Form(...),
+    chunk_index: int = Form(...),
+    total_chunks: int = Form(...),
+    chunk_file: UploadFile = File(...)
+):
+    safe_id = sanitize_file_id(file_id)
+    session_dir = UPLOAD_TEMP_DIR / safe_id
+    if not session_dir.exists():
+        raise HTTPException(status_code=404, detail="Upload session expired or not found.")
+
+    chunk_path = session_dir / f"chunk_{chunk_index}"
+    try:
+        async with aiofiles.open(chunk_path, "wb") as f:
+            while True:
+                buf = await chunk_file.read(1024 * 256)
+                if not buf:
+                    break
+                await f.write(buf)
+    finally:
+        await chunk_file.close()
+
+    session_file = session_dir / "session.json"
+    if session_file.exists():
+        try:
+            async with aiofiles.open(session_file, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
+            data["updated_at"] = time.time()
+            async with aiofiles.open(session_file, "w", encoding="utf-8") as f:
+                await f.write(json.dumps(data))
+        except Exception:
+            pass
+
+    received_chunks = []
+    for item in session_dir.iterdir():
+        if item.name.startswith("chunk_"):
+            try:
+                received_chunks.append(int(item.name.split("_")[1]))
+            except ValueError:
+                pass
+    received_chunks.sort()
+
+    return JSONResponse({
+        "status": "ok",
+        "chunk_index": chunk_index,
+        "received_chunks": received_chunks
+    })
+
+@app.post("/upload/finalize")
+async def upload_finalize(
+    file_id: str = Form(...),
+    force_overwrite: str = Form("false")
+):
+    safe_id = sanitize_file_id(file_id)
+    session_dir = UPLOAD_TEMP_DIR / safe_id
+    session_file = session_dir / "session.json"
+
+    if not session_dir.exists() or not session_file.exists():
+        raise HTTPException(status_code=404, detail="Upload session not found.")
+
+    try:
+        async with aiofiles.open(session_file, "r", encoding="utf-8") as f:
+            session_data = json.loads(await f.read())
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to read upload session data.")
+
+    total_chunks = session_data["total_chunks"]
+    safe_filename = session_data["filename"]
+    target_dir = Path(session_data["target_path"])
+
+    if not is_path_allowed(target_dir) or not target_dir.exists():
+        raise HTTPException(status_code=400, detail="Invalid or non-existent target folder.")
+
+    missing_chunks = []
+    for i in range(total_chunks):
+        chunk_path = session_dir / f"chunk_{i}"
+        if not chunk_path.exists():
+            missing_chunks.append(i)
+
+    if missing_chunks:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Missing chunks", "missing_chunks": missing_chunks}
+        )
+
+    destination = target_dir / safe_filename
+    if destination.exists() and force_overwrite != "true":
+        return JSONResponse(
+            status_code=200,
+            content={"collision": True, "filename": safe_filename}
+        )
+
+    temp_dest = target_dir / f".{safe_filename}.tmp_{int(time.time())}"
+    try:
+        async with aiofiles.open(temp_dest, "wb") as out_file:
+            for i in range(total_chunks):
+                chunk_path = session_dir / f"chunk_{i}"
+                async with aiofiles.open(chunk_path, "rb") as chunk_file:
+                    while True:
+                        data = await chunk_file.read(1024 * 512)
+                        if not data:
+                            break
+                        await out_file.write(data)
+
+        if destination.exists():
+            destination.unlink()
+        temp_dest.rename(destination)
+
+    except Exception as e:
+        if temp_dest.exists():
+            temp_dest.unlink()
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Assembly failed: {str(e)}")
+    finally:
+        try:
+            shutil.rmtree(session_dir)
+        except Exception:
+            pass
+
+    return JSONResponse(
+        status_code=200,
+        content={"status": "success", "filename": safe_filename},
+        headers={
+            "HX-Trigger": json.dumps({
+                "refresh-directory": {},
+                "show-toast": {"message": f"Successfully uploaded {safe_filename}", "type": "success"}
+            })
+        }
+    )
+
+@app.delete("/upload/cancel/{file_id}")
+async def upload_cancel(file_id: str):
+    safe_id = sanitize_file_id(file_id)
+    session_dir = UPLOAD_TEMP_DIR / safe_id
+    if session_dir.exists():
+        try:
+            shutil.rmtree(session_dir)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse({"status": "cancelled"})
+
 @app.post("/upload", response_class=HTMLResponse)
 async def upload_file(
     request: Request, 
@@ -488,10 +755,9 @@ async def upload_file(
     try:
         # 1. Resolve Path
         cleaned_path_str = path.strip()
-        if not cleaned_path_str or cleaned_path_str == "undefined":
+        target_dir = resolve_target(cleaned_path_str) if cleaned_path_str and cleaned_path_str != "undefined" else None
+        if target_dir is None:
             target_dir = ROOTS[0] if ROOTS else Path("C:/")
-        else:
-            target_dir = Path(cleaned_path_str.replace("\\", "/"))
 
         if not target_dir.exists() or not target_dir.is_dir():
             return HTMLResponse(status_code=400, content="Target folder does not exist.")
@@ -541,6 +807,7 @@ async def upload_file(
             })
         }
     )
+
 
 @app.get("/properties")
 async def get_properties(path: str):

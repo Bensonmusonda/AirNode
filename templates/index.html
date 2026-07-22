@@ -52,11 +52,360 @@
                 selectMode: false,
                 selectedItems: [],
 
+                uploads: [],
+                uploadDrawerOpen: false,
+                uploadDrawerMinimised: false,
+                isDraggingOver: false,
+                activeCollisionModal: null,
+
+                formatSize(bytes) {
+                    if (!bytes || bytes === 0) return '0 B';
+                    const k = 1024;
+                    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+                    const i = Math.floor(Math.log(bytes) / Math.log(k));
+                    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+                },
+
+                generateFileId(file) {
+                    const str = [file.name, file.size, file.lastModified].join('_');
+                    return 'upload_' + str.replace(/[^a-zA-Z0-9_-]/g, '_');
+                },
+
+                handleFilesSelected(files) {
+                    if (!files || files.length === 0) return;
+                    const CHUNK_SIZE = 2 * 1024 * 1024;
+                    for (let i = 0; i < files.length; i++) {
+                        const file = files[i];
+                        const id = this.generateFileId(file);
+                        let existing = this.uploads.find(u => u.id === id);
+                        if (existing) {
+                            existing.status = 'queued';
+                            existing.progress = 0;
+                            existing.uploadedBytes = 0;
+                            existing.errorMessage = '';
+                            existing.retryCount = 0;
+                            existing.paused = false;
+                            existing.uploadedChunks = new Set();
+                        } else {
+                            const totalChunks = Math.ceil(file.size / CHUNK_SIZE) || 1;
+                            this.uploads.push({
+                                id: id,
+                                file: file,
+                                filename: file.name,
+                                size: file.size,
+                                targetPath: this.currentPath,
+                                status: 'queued',
+                                progress: 0,
+                                uploadedBytes: 0,
+                                speed: 0,
+                                totalChunks: totalChunks,
+                                uploadedChunks: new Set(),
+                                errorMessage: '',
+                                retryCount: 0,
+                                paused: false,
+                                activeXhr: null,
+                                forceOverwrite: false
+                            });
+                        }
+                    }
+                    this.uploadDrawerOpen = true;
+                    this.uploadDrawerMinimised = false;
+                    this.processUploadQueue();
+                },
+
+                processUploadQueue() {
+                    const activeCount = this.uploads.filter(u => u.status === 'uploading').length;
+                    const MAX_CONCURRENT = 2;
+                    if (activeCount >= MAX_CONCURRENT) return;
+                    
+                    const nextItem = this.uploads.find(u => u.status === 'queued' && !u.paused);
+                    if (nextItem) {
+                        this.startUpload(nextItem);
+                        if (activeCount + 1 < MAX_CONCURRENT) {
+                            this.processUploadQueue();
+                        }
+                    }
+                },
+
+                async startUpload(item) {
+                    item.status = 'uploading';
+                    item.paused = false;
+                    item.errorMessage = '';
+                    const CHUNK_SIZE = 2 * 1024 * 1024;
+
+                    try {
+                        const initFormData = new FormData();
+                        initFormData.append('filename', item.filename);
+                        initFormData.append('file_size', item.size);
+                        initFormData.append('target_path', item.targetPath || this.currentPath);
+                        initFormData.append('file_id', item.id);
+                        initFormData.append('total_chunks', item.totalChunks);
+                        initFormData.append('force_overwrite', item.forceOverwrite ? 'true' : 'false');
+
+                        const initResp = await fetch('/upload/init', {
+                            method: 'POST',
+                            body: initFormData
+                        });
+
+                        if (!initResp.ok) {
+                            const errText = await initResp.text();
+                            throw new Error(errText || 'Failed to initialize upload.');
+                        }
+
+                        const initData = await initResp.json();
+
+                        if (initData.collision) {
+                            item.status = 'collision';
+                            this.activeCollisionModal = item;
+                            this.processUploadQueue();
+                            return;
+                        }
+
+                        if (initData.resumed && Array.isArray(initData.received_chunks)) {
+                            item.uploadedChunks = new Set(initData.received_chunks);
+                            item.uploadedBytes = Math.min(item.size, item.uploadedChunks.size * CHUNK_SIZE);
+                            item.progress = Math.round((item.uploadedBytes / item.size) * 100);
+                        }
+
+                        for (let idx = 0; idx < item.totalChunks; idx++) {
+                            if (item.paused || item.status === 'paused' || item.status === 'cancelled') {
+                                return;
+                            }
+
+                            if (item.uploadedChunks.has(idx)) {
+                                continue;
+                            }
+
+                            const start = idx * CHUNK_SIZE;
+                            const end = Math.min(item.size, (idx + 1) * CHUNK_SIZE);
+                            const chunkBlob = item.file.slice(start, end);
+
+                            const ok = await this.uploadSingleChunk(item, idx, chunkBlob);
+                            if (!ok) {
+                                if (item.status !== 'paused' && item.status !== 'cancelled') {
+                                    item.status = 'error';
+                                }
+                                this.processUploadQueue();
+                                return;
+                            }
+                        }
+
+                        if (item.paused || item.status === 'paused' || item.status === 'cancelled') {
+                            return;
+                        }
+
+                        const finalizeFormData = new FormData();
+                        finalizeFormData.append('file_id', item.id);
+                        finalizeFormData.append('force_overwrite', item.forceOverwrite ? 'true' : 'false');
+
+                        const finalizeResp = await fetch('/upload/finalize', {
+                            method: 'POST',
+                            body: finalizeFormData
+                        });
+
+                        if (!finalizeResp.ok) {
+                            const errData = await finalizeResp.json().catch(() => ({ detail: 'Assembly failed' }));
+                            throw new Error(errData.detail || 'Assembly failed');
+                        }
+
+                        item.status = 'completed';
+                        item.progress = 100;
+                        item.uploadedBytes = item.size;
+
+                        window.dispatchEvent(new CustomEvent('show-toast', {
+                            detail: { message: `Successfully uploaded ${item.filename}`, type: 'success' }
+                        }));
+
+                        htmx.ajax('GET', '/browse?path=' + encodeURIComponent(this.currentPath), { target: '#file-list-region', swap: 'innerHTML' });
+
+                    } catch (err) {
+                        console.error('[AirNode Upload Error]', err);
+                        item.status = 'error';
+                        item.errorMessage = err.message || 'Upload failed.';
+                    } finally {
+                        this.processUploadQueue();
+                    }
+                },
+
+                uploadSingleChunk(item, chunkIndex, chunkBlob) {
+                    return new Promise((resolve) => {
+                        let attempts = 0;
+                        const maxAttempts = 3;
+
+                        const attemptUpload = () => {
+                            if (item.paused || item.status === 'paused' || item.status === 'cancelled') {
+                                resolve(false);
+                                return;
+                            }
+
+                            const fd = new FormData();
+                            fd.append('file_id', item.id);
+                            fd.append('chunk_index', chunkIndex);
+                            fd.append('total_chunks', item.totalChunks);
+                            fd.append('chunk_file', chunkBlob, item.filename + '.part');
+
+                            const xhr = new XMLHttpRequest();
+                            item.activeXhr = xhr;
+                            let startTime = Date.now();
+                            let lastLoaded = 0;
+
+                            xhr.upload.onprogress = (e) => {
+                                if (e.lengthComputable) {
+                                    const currentChunkUploaded = e.loaded;
+                                    const now = Date.now();
+                                    const timeDiff = (now - startTime) / 1000;
+                                    if (timeDiff > 0.5) {
+                                        item.speed = Math.round((currentChunkUploaded - lastLoaded) / timeDiff);
+                                        startTime = now;
+                                        lastLoaded = currentChunkUploaded;
+                                    }
+                                    const baseBytes = item.uploadedChunks.size * (2 * 1024 * 1024);
+                                    const totalLoaded = Math.min(item.size, baseBytes + currentChunkUploaded);
+                                    item.progress = Math.round((totalLoaded / item.size) * 100);
+                                }
+                            };
+
+                            xhr.onload = () => {
+                                item.activeXhr = null;
+                                if (xhr.status === 200) {
+                                    item.uploadedChunks.add(chunkIndex);
+                                    item.uploadedBytes = Math.min(item.size, item.uploadedChunks.size * (2 * 1024 * 1024));
+                                    item.progress = Math.round((item.uploadedBytes / item.size) * 100);
+                                    resolve(true);
+                                } else {
+                                    handleFailure();
+                                }
+                            };
+
+                            xhr.onerror = () => {
+                                item.activeXhr = null;
+                                handleFailure();
+                            };
+
+                            xhr.onabort = () => {
+                                item.activeXhr = null;
+                                resolve(false);
+                            };
+
+                            const handleFailure = () => {
+                                attempts++;
+                                if (attempts < maxAttempts && !item.paused && item.status !== 'cancelled') {
+                                    setTimeout(attemptUpload, attempts * 1000);
+                                } else {
+                                    item.errorMessage = `Chunk ${chunkIndex + 1} upload failed.`;
+                                    resolve(false);
+                                }
+                            };
+
+                            xhr.open('POST', '/upload/chunk');
+                            xhr.send(fd);
+                        };
+
+                        attemptUpload();
+                    });
+                },
+
+                pauseUpload(item) {
+                    item.paused = true;
+                    item.status = 'paused';
+                    if (item.activeXhr) {
+                        item.activeXhr.abort();
+                        item.activeXhr = null;
+                    }
+                    this.processUploadQueue();
+                },
+
+                resumeUpload(item) {
+                    item.paused = false;
+                    item.status = 'queued';
+                    item.errorMessage = '';
+                    item.retryCount = 0;
+                    this.processUploadQueue();
+                },
+
+                cancelUpload(item) {
+                    item.status = 'cancelled';
+                    if (item.activeXhr) {
+                        item.activeXhr.abort();
+                        item.activeXhr = null;
+                    }
+                    fetch(`/upload/cancel/${item.id}`, { method: 'DELETE' }).catch(() => {});
+                    this.uploads = this.uploads.filter(u => u.id !== item.id);
+                    this.processUploadQueue();
+                },
+
+                resolveCollision(overwrite) {
+                    if (!this.activeCollisionModal) return;
+                    const item = this.activeCollisionModal;
+                    this.activeCollisionModal = null;
+
+                    if (overwrite) {
+                        item.forceOverwrite = true;
+                        item.status = 'queued';
+                        this.processUploadQueue();
+                    } else {
+                        item.status = 'error';
+                        item.errorMessage = 'Skipped file.';
+                        this.processUploadQueue();
+                    }
+                },
+
+                clearCompletedUploads() {
+                    this.uploads = this.uploads.filter(u => u.status !== 'completed');
+                },
+
+                get uploadSummary() {
+                    if (this.uploads.length === 0) return '';
+                    const total = this.uploads.length;
+                    const completed = this.uploads.filter(u => u.status === 'completed').length;
+                    const errors = this.uploads.filter(u => u.status === 'error').length;
+                    const uploading = this.uploads.filter(u => u.status === 'uploading').length;
+
+                    if (uploading > 0) {
+                        return `Uploading ${completed + uploading} of ${total} files…`;
+                    } else if (errors > 0) {
+                        return `${completed} completed, ${errors} failed`;
+                    } else {
+                        return `${completed} of ${total} files uploaded`;
+                    }
+                },
+
+                get overallUploadProgress() {
+                    if (this.uploads.length === 0) return 0;
+                    const totalBytes = this.uploads.reduce((acc, u) => acc + u.size, 0);
+                    if (totalBytes === 0) return 100;
+                    const loadedBytes = this.uploads.reduce((acc, u) => acc + (u.uploadedBytes || 0), 0);
+                    return Math.round((loadedBytes / totalBytes) * 100);
+                },
+
+                handleDragOver(e) {
+                    e.preventDefault();
+                    if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+                        this.isDraggingOver = true;
+                    }
+                },
+
+                handleDragLeave(e) {
+                    e.preventDefault();
+                    if (e.target === document.documentElement || e.target === document.body) {
+                        this.isDraggingOver = false;
+                    }
+                },
+
+                handleDrop(e) {
+                    e.preventDefault();
+                    this.isDraggingOver = false;
+                    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                        this.handleFilesSelected(e.dataTransfer.files);
+                    }
+                },
+
                 init() {
                     window.__airnode = this;
                     this.currentPath = document.getElementById('init-path').dataset.path;
                     this.updateCount();
                     this.$nextTick(() => this.sortFiles());
+
 
                     if (this.darkMode) {
                         document.documentElement.classList.add('dark');
@@ -469,10 +818,23 @@
 
     <div class="layout" 
         x-data="airnode"
+        @dragover.prevent="handleDragOver($event)"
+        @dragleave.prevent="handleDragLeave($event)"
+        @drop.prevent="handleDrop($event)"
         x-on:refresh-directory.window="
             htmx.ajax('GET', '/browse?path=' + encodeURIComponent(currentPath), { target: '#file-list-region', swap: 'innerHTML' });
             $nextTick(() => updateCount());
         ">
+
+        <!-- Drag and Drop Fullscreen Overlay -->
+        <div class="drag-drop-overlay" x-show="isDraggingOver" style="display: none;" x-transition>
+            <div class="drag-drop-content">
+                <i data-lucide="upload-cloud" style="width: 48px; height: 48px; stroke: var(--accent, #3b82f6);"></i>
+                <h3 style="margin: 0; font-size: 18px; font-weight: 600;">Drop files here to upload</h3>
+                <p style="margin: 0; font-size: 13px; color: var(--text-2);">Files will be uploaded directly to current directory.</p>
+            </div>
+        </div>
+
 
         <header class="header">
             <span class="wordmark">AirNode</span>
@@ -814,41 +1176,18 @@
             </div>
         </div>
 
-        <div class="floating-controls" 
-            x-data="{ uploading: false }" 
-            x-show="viewer === null">
-            
-            <div class="upload-card-indicator" x-show="uploading" style="display: none;">
-                <div class="spinner"></div>
-                <span style="font-size: 13px; color: var(--text-2);">Uploading file...</span>
-            </div>
-
-            <form id="file-upload-form" 
-                hx-post="/upload" 
-                hx-encoding="multipart/form-data" 
-                hx-swap="none"
-                x-on:htmx:after-request="
-                    uploading = false; 
-                    document.getElementById('file-upload-input').value = '';
-                    document.getElementById('force-overwrite-input').value = 'false';
-                    if(event.detail.xhr.status !== 200) {
-                        window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Upload failed.', type: 'error' } }));
+        <div class="floating-controls" x-show="viewer === null">
+            <input type="file" 
+                id="file-upload-input" 
+                name="file" 
+                multiple
+                x-on:change="
+                    if ($el.files.length > 0) {
+                        handleFilesSelected($el.files);
+                        $el.value = '';
                     }
-                "
-                style="display: none;">
-                <input type="hidden" name="path" x-bind:value="currentPath" />
-                <input type="hidden" id="force-overwrite-input" name="force_overwrite" value="false" />
-                
-                <input type="file" 
-                    id="file-upload-input" 
-                    name="file" 
-                    x-on:change="
-                        if ($el.files.length > 0) {
-                            uploading = true;
-                            htmx.trigger('#file-upload-form', 'submit');
-                        }
-                    " />
-            </form>
+                " 
+                style="display: none;" />
 
             <button id="fab-upload" class="fab-btn" x-on:click="document.getElementById('file-upload-input').click()" aria-label="Upload File">
                 <i data-lucide="upload" style="width:18px;height:18px;"></i>
@@ -865,6 +1204,87 @@
                 </button>
             </div>
         </div>
+
+        <!-- Resumable Batch Upload Manager Drawer -->
+        <div class="upload-manager-drawer" x-show="uploads.length > 0" style="display: none;" x-transition>
+            <div class="upload-drawer-header" x-on:click="uploadDrawerMinimised = !uploadDrawerMinimised">
+                <div class="upload-drawer-title">
+                    <i data-lucide="upload-cloud" style="width: 18px; height: 18px; stroke: var(--accent, #3b82f6);"></i>
+                    <span x-text="uploadSummary"></span>
+                </div>
+                <div class="upload-drawer-actions" x-on:click.stop>
+                    <button class="batch-btn" x-on:click="uploadDrawerMinimised = !uploadDrawerMinimised" title="Toggle drawer">
+                        <i data-lucide="chevron-down" style="width: 16px; height: 16px; transition: transform 0.2s;" :style="uploadDrawerMinimised ? 'transform: rotate(180deg);' : ''"></i>
+                    </button>
+                    <button class="batch-btn" x-show="uploads.some(u => u.status === 'completed')" x-on:click="clearCompletedUploads()" title="Clear completed">
+                        <i data-lucide="check-check" style="width: 16px; height: 16px;"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="upload-progress-bar-container" style="border-radius:0; height: 3px;">
+                <div class="upload-progress-bar-fill" :style="`width: ${overallUploadProgress}%;`"></div>
+            </div>
+
+            <div class="upload-drawer-body" x-show="!uploadDrawerMinimised">
+                <template x-for="item in uploads" :key="item.id">
+                    <div class="upload-item-card">
+                        <div class="upload-item-row">
+                            <div class="upload-item-info">
+                                <i data-lucide="file" style="width: 16px; height: 16px; flex-shrink: 0; color: var(--text-2);"></i>
+                                <span class="upload-item-name" x-text="item.filename" :title="item.filename"></span>
+                            </div>
+                            <div class="upload-item-controls">
+                                <span class="upload-status-badge" :class="item.status" x-text="item.status === 'uploading' ? `${item.progress}%` : item.status"></span>
+                                
+                                <button class="batch-btn" x-show="item.status === 'uploading'" x-on:click="pauseUpload(item)" title="Pause">
+                                    <i data-lucide="pause" style="width: 14px; height: 14px;"></i>
+                                </button>
+                                <button class="batch-btn" x-show="item.status === 'paused' || item.status === 'error'" x-on:click="resumeUpload(item)" title="Resume / Retry">
+                                    <i data-lucide="play" style="width: 14px; height: 14px;"></i>
+                                </button>
+                                <button class="batch-btn batch-btn-danger" x-on:click="cancelUpload(item)" title="Cancel">
+                                    <i data-lucide="x" style="width: 14px; height: 14px;"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="upload-progress-bar-container">
+                            <div class="upload-progress-bar-fill" 
+                                :class="{ 'error': item.status === 'error', 'completed': item.status === 'completed' }" 
+                                :style="`width: ${item.progress}%;`"></div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-2);">
+                            <span x-text="formatSize(item.uploadedBytes) + ' / ' + formatSize(item.size)"></span>
+                            <span x-show="item.status === 'uploading' && item.speed > 0" x-text="formatSize(item.speed) + '/s'"></span>
+                            <span x-show="item.errorMessage" style="color: var(--danger);" x-text="item.errorMessage"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Upload Collision Modal -->
+        <div class="modal-overlay" 
+            x-show="activeCollisionModal !== null" 
+            style="display: none;" 
+            x-transition>
+            <div class="modal-card" x-on:click.outside="resolveCollision(false)">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                    <i data-lucide="alert-triangle" style="stroke: var(--warning, #f59e0b); width: 20px; height: 20px;"></i>
+                    <h4 style="margin: 0; font-size: 15px; font-weight: 600;">File Already Exists</h4>
+                </div>
+                <p style="font-size: 13px; color: var(--text-2); margin: 0; line-height: 1.5;">
+                    A file named <strong style="color: var(--text);" x-text="activeCollisionModal ? activeCollisionModal.filename : ''"></strong> already exists in this directory. Do you want to overwrite it?
+                </p>
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="resolveCollision(false)">Skip</button>
+                    <button class="modal-btn primary" x-on:click="resolveCollision(true)">Overwrite</button>
+                </div>
+            </div>
+        </div>
+
 
         <div class="toast-container" 
              x-data="{ toasts: [] }" 
