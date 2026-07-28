@@ -1,4 +1,4 @@
-# AirNode
+# AirNode - Remote File explorer on local network
 
 **Local Network File Explorer & Media Server**  
 Stack: FastAPI · HTMX · Alpine.js · Pico CSS  
