@@ -26,10 +26,16 @@ if (-not $TargetPid) {
 $Process = Get-Process -Id $TargetPid -ErrorAction SilentlyContinue
 
 if ($Process) {
-    Stop-Process -Id $TargetPid -Force
+    Stop-Process -Id $TargetPid -Force -ErrorAction SilentlyContinue
     Write-Host "AirNode (PID $TargetPid) stopped." -ForegroundColor Green
 } else {
     Write-Host "No process found for PID $TargetPid. It may have already exited." -ForegroundColor Yellow
 }
 
-Remove-Item $PidFile -Force
+# Ensure any orphaned uvicorn worker processes listening on port 8000 are also terminated
+Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object {
+    Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+}
+
+Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+

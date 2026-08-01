@@ -11,11 +11,9 @@
     <link rel="stylesheet" href="/static/css/viewer.css" />
     <link rel="stylesheet" href="/static/css/audio-player.css" />
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/vendor/inter-font.css" />
 
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
+    <script src="/static/vendor/lucide.min.js" defer></script>
 
     <script src="/static/vendor/htmx.min.js" defer></script>
     <script>
@@ -808,6 +806,7 @@
 
     </script>
 
+    <script src="/static/js/media-player.js"></script>
     <script src="/static/js/image-viewer.js"></script>
     <script src="/static/js/audio-player.js"></script>
     <script src="/static/vendor/alpine.min.js" defer></script>
@@ -872,6 +871,8 @@
                 <span x-text="`${fileCount} file${fileCount === 1 ? '' : 's'}`"></span>
             </span>
         </footer>
+
+        {% include "partials/mini_player.html" %}
 
         <div class="modal-overlay" 
             x-data="{ showModal: false, collisionFilename: '' }"

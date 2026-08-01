@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AirNode Music Hub</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
+    <link rel="stylesheet" href="/static/css/viewer.css" />
+    <link rel="stylesheet" href="/static/css/audio-player.css" />
+    <link rel="stylesheet" href="/static/vendor/inter-font.css" />
+    <script src="/static/vendor/lucide.min.js" defer></script>
+    <script src="/static/vendor/htmx.min.js" defer></script>
+    <script src="/static/js/media-player.js"></script>
+    <script src="/static/js/image-viewer.js"></script>
+    <script src="/static/js/audio-player.js"></script>
+    <script src="/static/vendor/alpine.min.js" defer></script>
+    <style>
+        /* ── Quick-action toolbar ──────────────────────────────────── */
+        .music-toolbar {
+            display: flex;
+            gap: 8px;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface-1);
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .music-toolbar::-webkit-scrollbar { display: none; }
+
+        .toolbar-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1.5px solid var(--border);
+            background: var(--surface-1);
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.12s, border-color 0.12s;
+            font-family: inherit;
+        }
+        .toolbar-btn:hover { background: rgba(128,128,128,0.1); }
+        .toolbar-btn.accent {
+            background: rgba(236,72,153,0.1);
+            border-color: rgba(236,72,153,0.4);
+            color: #ec4899;
+        }
+        .toolbar-btn.accent:hover { background: rgba(236,72,153,0.18); }
+
+        /* ── Folder browser modal ──────────────────────────────────── */
+        .folder-browser {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        .folder-browser-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            cursor: pointer;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: background 0.1s;
+        }
+        .folder-browser-item:hover { background: rgba(128,128,128,0.1); }
+
+        /* ── Playlist list ─────────────────────────────────────────── */
+        .playlist-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 11px 14px;
+            border-radius: 10px;
+            border: 1.5px solid var(--border);
+            background: var(--surface-1);
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        .playlist-row:hover { background: rgba(128,128,128,0.08); }
+
+        /* ── Library section ───────────────────────────────────────── */
+        .lib-section-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            color: var(--text-2);
+            margin: 22px 0 10px;
+        }
+        .cache-badge {
+            font-size: 11px;
+            color: var(--text-2);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 20px;
+            background: var(--surface-2);
+            margin-left: 8px;
+        }
+
+        /* ── Track row ─────────────────────────────────────────────── */
+        .track-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+        .track-row:hover { background: rgba(128,128,128,0.08); }
+        .track-num { font-size: 12px; color: var(--text-2); width: 22px; text-align: right; flex-shrink: 0; }
+    </style>
+</head>
+<body>
+    <div class="layout" x-data="{
+        /* ── state ─────────────────────── */
+        folders: [],
+        loading: false,
+        libLoaded: false,
+        fromCache: false,
+        selectedFolder: null,
+
+        playlists: [],
+        selectedPlaylist: null,
+
+        showSleepModal: false,
+        activeSleepTimer: null,
+        showNewPlaylistModal: false,
+        newPlaylistName: '',
+
+        showFolderBrowser: false,
+        browserMode: 'folder',   /* 'folder' | 'playlist' */
+        browserPath: '/',
+        browserItems: [],
+        browserLoading: false,
+        browserHistory: [],
+
+        viewer: null,
+
+        /* ── init ──────────────────────── */
+        init() {
+            window.__airnode = this;
+            this.playlists = JSON.parse(localStorage.getItem('airnode_playlists') || '[]');
+            this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+        },
+
+        /* ── library ───────────────────── */
+        fetchLibrary(bust) {
+            this.loading = true;
+            const url = bust ? '/api/music/scan?bust=1' : '/api/music/scan';
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {
+                    this.folders = data.folders || [];
+                    this.fromCache = !!data.from_cache;
+                    this.libLoaded = true;
+                    this.loading = false;
+                    this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                })
+                .catch(() => { this.loading = false; });
+        },
+
+        /* ── folder browser ────────────── */
+        openFolderBrowser(mode) {
+            this.browserMode = mode;
+            this.browserHistory = [];
+            this.browserPath = '/';
+            this.showFolderBrowser = true;
+            this.browseTo('/');
+        },
+        browseTo(path) {
+            this.browserLoading = true;
+            this.browserPath = path;
+            const url = (path === '/' || path === '')
+                ? '/api/browse'
+                : '/api/browse?path=' + encodeURIComponent(path);
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.roots) {
+                        /* Windows root — show drive letters as folders */
+                        this.browserItems = data.roots.map(r => ({ name: r, path: r, type: 'directory' }));
+                    } else {
+                        this.browserItems = (data.entries || []).filter(e => e.type === 'directory');
+                    }
+                    this.browserLoading = false;
+                    this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                })
+                .catch(() => { this.browserLoading = false; });
+        },
+        browserEnter(item) {
+            this.browserHistory.push(this.browserPath);
+            this.browseTo(item.path);
+        },
+        browserBack() {
+            if (this.browserHistory.length > 0) {
+                this.browseTo(this.browserHistory.pop());
+            }
+        },
+        selectFolder(item) {
+            /* 'Open as playlist' mode — load tracks instantly (single folder, no walk) */
+            if (this.browserMode === 'folder') {
+                fetch('/api/music/folder?path=' + encodeURIComponent(item.path))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (!data.tracks || data.tracks.length === 0) {
+                            alert('No audio files found directly in that folder.');
+                            return;
+                        }
+                        this.showFolderBrowser = false;
+                        this.selectedFolder = data;
+                        this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                    });
+            } else {
+                /* 'Add to new playlist' mode */
+                fetch('/api/music/folder?path=' + encodeURIComponent(item.path))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (!data.tracks || data.tracks.length === 0) {
+                            alert('No audio files found in that folder.');
+                            return;
+                        }
+                        this.showFolderBrowser = false;
+                        const name = data.folder || item.name;
+                        const pl = { id: Date.now(), name, tracks: data.tracks };
+                        this.playlists.push(pl);
+                        this.savePlaylists();
+                        this.selectedPlaylist = pl;
+                        this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                    });
+            }
+        },
+
+        /* ── playlists ─────────────────── */
+        savePlaylists() {
+            localStorage.setItem('airnode_playlists', JSON.stringify(this.playlists));
+        },
+        createEmptyPlaylist() {
+            if (!this.newPlaylistName.trim()) return;
+            const pl = { id: Date.now(), name: this.newPlaylistName.trim(), tracks: [] };
+            this.playlists.push(pl);
+            this.savePlaylists();
+            this.newPlaylistName = '';
+            this.showNewPlaylistModal = false;
+            this.selectedPlaylist = pl;
+            this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+        },
+        deletePlaylist(pl) {
+            this.playlists = this.playlists.filter(p => p.id !== pl.id);
+            this.savePlaylists();
+            if (this.selectedPlaylist && this.selectedPlaylist.id === pl.id) this.selectedPlaylist = null;
+        },
+
+        /* ── playback ──────────────────── */
+        playTrackIn(tracklist, index) {
+            if (!tracklist || !tracklist[index]) return;
+            if (window.AirNodePlayer) {
+                window.AirNodePlayer.setQueue(tracklist, index);
+            }
+            const track = tracklist[index];
+            this.viewer = { name: track.title || track.name, path: track.path, kind: 'audio' };
+        },
+        playFolder(folder, index) { this.playTrackIn(folder.tracks, index); },
+        playPlaylist(pl, index) { this.playTrackIn(pl.tracks, index); },
+
+        /* openViewer is called by AirNodePlayer.playNextInQueue() and lock-screen buttons */
+        openViewer(file) {
+            const ext = (file.ext || file.path?.split('.').pop() || '').toLowerCase();
+            const audioExts = ['mp3', 'm4a', 'flac', 'wav', 'ogg', 'aac', 'opus'];
+            const kind = audioExts.includes(ext) ? 'audio' : 'audio'; // Music Hub is always audio
+            this.viewer = { name: file.name || file.title, path: file.path, kind };
+        },
+        closeViewer() { this.viewer = null; },
+
+        /* ── sleep timer ───────────────── */
+        setSleepTimer(minutes) {
+            if (window.AirNodePlayer) { window.AirNodePlayer.startSleepTimer(minutes); this.activeSleepTimer = minutes; }
+            this.showSleepModal = false;
+        },
+        cancelSleepTimer() {
+            if (window.AirNodePlayer) { window.AirNodePlayer.clearSleepTimer(); this.activeSleepTimer = null; }
+            this.showSleepModal = false;
+        }
+    }">
+        <!-- ── Header ──────────────────────────────────────────────── -->
+        <header class="header">
+            <a href="/" class="header-icon-btn" aria-label="Back to home">
+                <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
+            </a>
+            <span class="wordmark" style="font-size:16px; font-weight:700; color:var(--text);">Music Hub</span>
+            <div style="flex:1;"></div>
+            <button class="header-icon-btn" x-on:click="showSleepModal = true" aria-label="Sleep timer" :style="activeSleepTimer ? 'color:#ec4899;' : ''">
+                <i data-lucide="moon" style="width:18px;height:18px;"></i>
+            </button>
+            <button class="header-icon-btn" x-on:click="fetchLibrary(true)" aria-label="Refresh library" :class="loading ? 'spin' : ''">
+                <i data-lucide="refresh-cw" style="width:18px;height:18px;"></i>
+            </button>
+        </header>
+
+        <!-- ── Quick-action toolbar ────────────────────────────────── -->
+        <div class="music-toolbar">
+            <button class="toolbar-btn accent" x-on:click="openFolderBrowser('folder')">
+                <i data-lucide="folder-open" style="width:15px;height:15px;"></i>
+                Open folder
+            </button>
+            <button class="toolbar-btn" x-on:click="showNewPlaylistModal = true">
+                <i data-lucide="plus" style="width:15px;height:15px;"></i>
+                New playlist
+            </button>
+            <button class="toolbar-btn" x-on:click="openFolderBrowser('playlist')">
+                <i data-lucide="folder-plus" style="width:15px;height:15px;"></i>
+                Folder → playlist
+            </button>
+            <button class="toolbar-btn" x-show="!libLoaded && !loading" x-on:click="fetchLibrary(false)">
+                <i data-lucide="library" style="width:15px;height:15px;"></i>
+                Scan library
+            </button>
+        </div>
+
+        <main class="list-wrap" style="background:var(--bg);">
+            <div class="music-container">
+
+                <!-- ── Playlists section ──────────────────────────── -->
+                <template x-if="playlists.length > 0 && selectedPlaylist === null && selectedFolder === null">
+                    <div>
+                        <div class="lib-section-label">Your Playlists</div>
+                        <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:24px;">
+                            <template x-for="pl in playlists" :key="pl.id">
+                                <div class="playlist-row" x-on:click="selectedPlaylist = pl; $nextTick(() => { if(window.lucide) lucide.createIcons(); })">
+                                    <div style="display:flex; align-items:center; gap:12px;">
+                                        <div style="width:34px;height:34px;border-radius:8px;background:rgba(236,72,153,0.12);color:#ec4899;display:flex;align-items:center;justify-content:center;">
+                                            <i data-lucide="list-music" style="width:16px;height:16px;"></i>
+                                        </div>
+                                        <div>
+                                            <div style="font-size:14px;font-weight:600;" x-text="pl.name"></div>
+                                            <div style="font-size:12px;color:var(--text-2);" x-text="`${pl.tracks.length} track${pl.tracks.length===1?'':'s'}`"></div>
+                                        </div>
+                                    </div>
+                                    <div style="display:flex;align-items:center;gap:6px;">
+                                        <button class="header-icon-btn" style="width:28px;height:28px;" x-on:click.stop="playPlaylist(pl, 0)">
+                                            <i data-lucide="play" style="width:14px;height:14px;color:#ec4899;"></i>
+                                        </button>
+                                        <button class="header-icon-btn" style="width:28px;height:28px;" x-on:click.stop="deletePlaylist(pl)">
+                                            <i data-lucide="trash-2" style="width:13px;height:13px;color:var(--text-2);"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Inside a playlist ─────────────────────────── -->
+                <template x-if="selectedPlaylist !== null">
+                    <div>
+                        <button class="modal-btn" x-on:click="selectedPlaylist = null; $nextTick(()=>{if(window.lucide)lucide.createIcons();})" style="margin-bottom:16px;">
+                            <i data-lucide="arrow-left" style="width:14px;height:14px;margin-right:4px;"></i>Back
+                        </button>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+                            <h2 x-text="selectedPlaylist.name" style="font-size:20px;font-weight:700;color:var(--text);margin:0;"></h2>
+                            <button class="toolbar-btn accent" style="font-size:12px;padding:6px 12px;" x-on:click="playPlaylist(selectedPlaylist, 0)" x-show="selectedPlaylist.tracks.length > 0">
+                                <i data-lucide="play" style="width:13px;height:13px;"></i> Play all
+                            </button>
+                        </div>
+                        <template x-if="selectedPlaylist.tracks.length === 0">
+                            <p style="font-size:13px;color:var(--text-2);text-align:center;padding:32px 0;">
+                                No tracks yet. Use <strong>Folder → playlist</strong> to add audio files.
+                            </p>
+                        </template>
+                        <div style="display:flex;flex-direction:column;gap:2px;">
+                            <template x-for="(track, idx) in selectedPlaylist.tracks" :key="track.path">
+                                <div class="track-row" x-on:click="playPlaylist(selectedPlaylist, idx)">
+                                    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                                        <span class="track-num" x-text="idx+1"></span>
+                                        <i data-lucide="music-2" style="width:15px;height:15px;color:#ec4899;flex-shrink:0;"></i>
+                                        <span style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="track.title || track.name"></span>
+                                    </div>
+                                    <i data-lucide="play" style="width:14px;height:14px;opacity:0.45;flex-shrink:0;"></i>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Open-folder view ───────────────────────────── -->
+                <template x-if="selectedFolder !== null && selectedPlaylist === null">
+                    <div>
+                        <button class="modal-btn" x-on:click="selectedFolder = null; $nextTick(()=>{if(window.lucide)lucide.createIcons();})" style="margin-bottom:16px;">
+                            <i data-lucide="arrow-left" style="width:14px;height:14px;margin-right:4px;"></i>Back
+                        </button>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+                            <h2 x-text="selectedFolder.folder" style="font-size:20px;font-weight:700;color:var(--text);margin:0;"></h2>
+                            <button class="toolbar-btn accent" style="font-size:12px;padding:6px 12px;" x-on:click="playFolder(selectedFolder, 0)">
+                                <i data-lucide="play" style="width:13px;height:13px;"></i> Play all
+                            </button>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:2px;">
+                            <template x-for="(track, idx) in selectedFolder.tracks" :key="track.path">
+                                <div class="track-row" x-on:click="playFolder(selectedFolder, idx)">
+                                    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                                        <span class="track-num" x-text="idx+1"></span>
+                                        <i data-lucide="music-2" style="width:15px;height:15px;color:#ec4899;flex-shrink:0;"></i>
+                                        <span style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="track.title || track.name"></span>
+                                    </div>
+                                    <i data-lucide="play" style="width:14px;height:14px;opacity:0.45;flex-shrink:0;"></i>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Library (lazy-loaded) ──────────────────────── -->
+                <template x-if="selectedFolder === null && selectedPlaylist === null">
+                    <div>
+                        <!-- Scanning spinner -->
+                        <div x-show="loading" style="display:flex;align-items:center;gap:10px;padding:24px 0;color:var(--text-2);font-size:13px;">
+                            <div class="spinner" style="width:18px;height:18px;border-width:2px;"></div>
+                            Scanning your drives for audio files…
+                        </div>
+
+                        <!-- Empty prompt -->
+                        <div x-show="!loading && !libLoaded" style="text-align:center;padding:40px 0;color:var(--text-2);font-size:13px;">
+                            <i data-lucide="library" style="width:36px;height:36px;opacity:0.3;display:block;margin:0 auto 12px;"></i>
+                            Tap <strong>Scan library</strong> in the toolbar to index your music,<br>
+                            or <strong>Open folder</strong> to pick one right now.
+                        </div>
+
+                        <!-- Folder grid -->
+                        <template x-if="libLoaded && folders.length > 0">
+                            <div>
+                                <div class="lib-section-label" style="display:flex;align-items:center;gap:6px;">
+                                    Audio Folders
+                                    <span class="cache-badge" x-show="fromCache">
+                                        <i data-lucide="database" style="width:10px;height:10px;"></i> cached
+                                    </span>
+                                </div>
+                                <div class="subapps-grid" style="margin-bottom:36px;">
+                                    <template x-for="f in folders" :key="f.path">
+                                        <div class="subapp-card" x-on:click="selectedFolder = f; $nextTick(()=>{if(window.lucide)lucide.createIcons();})"
+                                             style="cursor:pointer;--card-border:rgba(236,72,153,0.35);">
+                                            <div class="subapp-card-icon" style="background:rgba(236,72,153,0.12);color:#ec4899;">
+                                                <i data-lucide="disc-3" style="width:18px;height:18px;"></i>
+                                            </div>
+                                            <div>
+                                                <div class="subapp-card-title" x-text="f.folder"></div>
+                                                <div class="subapp-card-desc" x-text="`${f.tracks.length} track${f.tracks.length===1?'':'s'}`"></div>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="libLoaded && folders.length === 0">
+                            <p style="font-size:13px;color:var(--text-2);text-align:center;padding:32px 0;">
+                                No audio files found on this device.
+                            </p>
+                        </template>
+                    </div>
+                </template>
+
+            </div><!-- /music-container -->
+        </main>
+
+        <!-- ── Folder browser modal ──────────────────────────────────── -->
+        <div class="modal-overlay" x-show="showFolderBrowser" style="display:none;" x-transition x-on:click.self="showFolderBrowser = false">
+            <div class="modal-card" style="max-width:420px;width:100%;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+                    <i data-lucide="folder-open" style="width:18px;height:18px;color:#ec4899;"></i>
+                    <h4 style="margin:0;font-size:15px;font-weight:600;" x-text="browserMode === 'folder' ? 'Open folder as playlist' : 'Add folder to playlist'"></h4>
+                    <div style="flex:1;"></div>
+                    <button class="header-icon-btn" x-on:click="showFolderBrowser = false"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+                </div>
+
+                <!-- Breadcrumb path -->
+                <div style="font-size:11px;color:var(--text-2);margin-bottom:10px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" x-text="browserPath"></div>
+
+                <div style="display:flex;gap:8px;margin-bottom:12px;">
+                    <button class="toolbar-btn" style="font-size:12px;padding:5px 10px;" x-show="browserHistory.length > 0" x-on:click="browserBack()">
+                        <i data-lucide="arrow-left" style="width:13px;height:13px;"></i> Back
+                    </button>
+                </div>
+
+                <div class="folder-browser">
+                    <div x-show="browserLoading" style="text-align:center;padding:24px;color:var(--text-2);font-size:13px;">
+                        <div class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;margin-right:8px;"></div>Loading…
+                    </div>
+                    <template x-if="!browserLoading">
+                        <div>
+                            <!-- "Use this folder" action at top -->
+                            <div class="folder-browser-item" style="background:rgba(236,72,153,0.07);border-radius:8px;margin-bottom:4px;font-weight:600;color:#ec4899;"
+                                 x-on:click="selectFolder({path: browserPath, name: browserPath.split('/').filter(Boolean).pop() || browserPath})">
+                                <i data-lucide="check-circle" style="width:16px;height:16px;"></i>
+                                Use this folder
+                            </div>
+                            <template x-for="item in browserItems" :key="item.path">
+                                <div class="folder-browser-item" x-on:click="browserEnter(item)">
+                                    <i data-lucide="folder" style="width:15px;height:15px;color:#f59e0b;flex-shrink:0;"></i>
+                                    <span x-text="item.name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                                    <i data-lucide="chevron-right" style="width:13px;height:13px;color:var(--text-2);margin-left:auto;flex-shrink:0;"></i>
+                                </div>
+                            </template>
+                            <div x-show="browserItems.length === 0" style="text-align:center;padding:20px;font-size:13px;color:var(--text-2);">
+                                No sub-folders here
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── New playlist modal ──────────────────────────────────────── -->
+        <div class="modal-overlay" x-show="showNewPlaylistModal" style="display:none;" x-transition x-on:click.self="showNewPlaylistModal = false">
+            <div class="modal-card" style="max-width:360px;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                    <i data-lucide="list-music" style="width:18px;height:18px;color:#ec4899;"></i>
+                    <h4 style="margin:0;font-size:15px;font-weight:600;">New Playlist</h4>
+                </div>
+                <input
+                    type="text"
+                    placeholder="Playlist name…"
+                    x-model="newPlaylistName"
+                    x-on:keydown.enter="createEmptyPlaylist()"
+                    style="width:100%;padding:10px 12px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface-2);color:var(--text);font-size:14px;box-sizing:border-box;font-family:inherit;margin-bottom:14px;"
+                    autofocus
+                />
+                <p style="font-size:12px;color:var(--text-2);margin:0 0 16px;">
+                    After creating, use <strong>Folder → playlist</strong> to fill it with tracks.
+                </p>
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="showNewPlaylistModal = false">Cancel</button>
+                    <button class="modal-btn" style="background:#ec4899;color:#fff;border-color:#ec4899;" x-on:click="createEmptyPlaylist()" :disabled="!newPlaylistName.trim()">Create</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Sleep timer modal ───────────────────────────────────────── -->
+        <div class="modal-overlay" x-show="showSleepModal" style="display:none;" x-transition>
+            <div class="modal-card" style="max-width:360px;">
+                <div style="display:flex;gap:10px;align-items:center;color:var(--text);margin-bottom:12px;">
+                    <i data-lucide="moon" style="color:#ec4899;width:20px;height:20px;"></i>
+                    <h4 style="margin:0;font-size:16px;font-weight:600;">Sleep Timer</h4>
+                </div>
+                <p style="font-size:13px;color:var(--text-2);margin:0 0 16px;">Fade out volume smoothly before stopping playback.</p>
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                    <button class="sheet-btn" x-on:click="setSleepTimer(15)">15 Minutes</button>
+                    <button class="sheet-btn" x-on:click="setSleepTimer(30)">30 Minutes</button>
+                    <button class="sheet-btn" x-on:click="setSleepTimer(45)">45 Minutes</button>
+                    <button class="sheet-btn danger" x-show="activeSleepTimer" x-on:click="cancelSleepTimer()">Turn Off Timer</button>
+                </div>
+                <div class="modal-actions" style="margin-top:16px;">
+                    <button class="modal-btn" x-on:click="showSleepModal = false">Close</button>
+                </div>
+            </div>
+        </div>
+
+        {% include "partials/mini_player.html" %}
+
+        <!-- ── Audio player overlay ────────────────────────────────────── -->
+        <div class="viewer-wrap" x-show="viewer !== null" x-transition.opacity style="display:none">
+            <div class="viewer-header">
+                <button class="viewer-close" x-on:click="closeViewer()" aria-label="Close player">
+                    <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
+                </button>
+                <span class="viewer-title" x-text="viewer?.name"></span>
+            </div>
+            <div class="viewer-body">
+                <template x-if="viewer?.kind === 'audio'">
+                    {% include "partials/audio_player.html" %}
+                </template>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -10,6 +10,7 @@ import json
 import traceback
 import zipfile
 import io
+import threading
 from urllib.parse import quote
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -24,34 +25,71 @@ from airnode_auth import (
     COOKIE_NAME,
     SESSION_MAX_AGE_SECONDS,
     check_login_lockout,
+    create_pin,
     create_session_token,
-    ensure_auth_config,
+    has_auth_config,
     register_login_failure,
     register_login_success,
     reset_pin,
     verify_pin,
     verify_session_token,
 )
+from paths import get_resource_dir, get_data_dir
 
 
 app = FastAPI(title="AirNode")
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+_resource_dir = get_resource_dir()
+_data_dir = get_data_dir()
 
-# NOTE: this runs even when main.py is launched directly (e.g. a bare
-# `uvicorn main:app --reload`, as the README's Development section suggests)
-# rather than through airnode_server.py. In that path nothing else prints
-# the PIN, so we print it here too on first creation to avoid a silent
-# lockout with no way to learn the PIN short of deleting the config file.
-_auth_config = ensure_auth_config()
-if _auth_config.created_pin:
-    print(f"AirNode access PIN: {_auth_config.created_pin}")
-    print("Save this PIN now; it will not be shown again. Delete .airnode-auth.json to reset it.")
+app.mount("/static", StaticFiles(directory=str(_resource_dir / "static")), name="static")
+templates = Jinja2Templates(directory=str(_resource_dir / "templates"))
 
 
-PUBLIC_PATHS = {"/login", "/favicon.ico"}
+PUBLIC_PATHS = {"/login", "/setup", "/favicon.ico"}
 PUBLIC_PREFIXES = ("/static/",)
+
+
+# ==============================================================================
+# Scan Result Cache (disk-backed, 30-minute TTL)
+# ==============================================================================
+
+_CACHE_DIR = _data_dir / ".airnode_cache"
+_CACHE_TTL = 1800  # 30 minutes
+_cache_lock = threading.Lock()
+
+
+def _cache_path(key: str) -> Path:
+    _CACHE_DIR.mkdir(exist_ok=True)
+    return _CACHE_DIR / f"{key}.json"
+
+
+def _read_cache(key: str) -> dict | None:
+    """Return cached result if fresh, else None."""
+    p = _cache_path(key)
+    try:
+        if p.exists() and (time.time() - p.stat().st_mtime) < _CACHE_TTL:
+            with p.open("r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+
+def _write_cache(key: str, data: dict) -> None:
+    p = _cache_path(key)
+    try:
+        with _cache_lock, p.open("w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def _invalidate_cache(key: str) -> None:
+    try:
+        _cache_path(key).unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _next_url(request: Request) -> str:
@@ -69,6 +107,14 @@ def _login_redirect(request: Request) -> RedirectResponse:
 @app.middleware("http")
 async def require_authentication(request: Request, call_next):
     path = request.url.path
+
+    # First-run setup: if no PIN has been created yet, force all requests
+    # to the /setup page (except /setup itself and static assets).
+    if not has_auth_config():
+        if path == "/setup" or path.startswith("/static/"):
+            return await call_next(request)
+        return RedirectResponse(url="/setup", status_code=303)
+
     if path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES):
         return await call_next(request)
 
@@ -279,6 +325,56 @@ def login_submit(
     return response
 
 
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page(request: Request):
+    """Renders the first-run PIN setup page.
+
+    Only accessible when no auth config exists yet. The middleware
+    redirects here on first run; once a PIN is set, /setup redirects
+    to /login instead.
+    """
+    if has_auth_config():
+        return RedirectResponse(url="/login", status_code=303)
+    return _render(request, "setup.html", {"error": ""})
+
+
+@app.post("/setup", response_class=HTMLResponse)
+def setup_submit(
+    request: Request,
+    pin: str = Form(...),
+    pin_confirm: str = Form(...),
+):
+    """Creates the initial PIN on first run.
+
+    Restricted to localhost requests so a remote device on the hotspot
+    cannot set the PIN before the host user does.
+    """
+    if has_auth_config():
+        return RedirectResponse(url="/login", status_code=303)
+
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        return _render(request, "setup.html", {
+            "error": "For security, the PIN must be set from this computer (localhost).",
+        }, status_code=403)
+
+    pin = pin.strip()
+    pin_confirm = pin_confirm.strip()
+
+    if not pin:
+        return _render(request, "setup.html", {"error": "PIN cannot be empty."})
+    if len(pin) < 4:
+        return _render(request, "setup.html", {"error": "PIN must be at least 4 digits."})
+    if not pin.isdigit():
+        return _render(request, "setup.html", {"error": "PIN must contain only digits."})
+    if pin != pin_confirm:
+        return _render(request, "setup.html", {"error": "PINs do not match."})
+
+    create_pin(pin)
+    response = RedirectResponse(url="/login", status_code=303)
+    return response
+
+
 @app.post("/logout")
 def logout():
     response = RedirectResponse(url="/login", status_code=303)
@@ -475,7 +571,7 @@ async def download_batch(paths: str):
         headers={"Content-Disposition": 'attachment; filename="archive.zip"'}
     )
 
-UPLOAD_TEMP_DIR = Path(__file__).parent.resolve() / ".airnode_upload_temp"
+UPLOAD_TEMP_DIR = _data_dir / ".airnode_upload_temp"
 UPLOAD_TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 def cleanup_expired_upload_sessions(ttl_hours: int = 24):
@@ -915,7 +1011,31 @@ def create_new_folder(request: Request, current_path: str = Form(...), folder_na
     except Exception as e:
         print(f"\n[AirNode Folder Creation Error]: {str(e)}")
         return Response(status_code=500, content=f"Failed to create folder: {str(e)}")
-# === Streaming File Viewer Endpoint (with HTTP Range request support) ===
+# ==============================================================================
+# Streaming File Viewer Endpoint (with HTTP Range request support)
+# ==============================================================================
+
+# Explicit MIME overrides — Python's mimetypes module commonly gets these
+# wrong on Windows (e.g. .m4a → None, .flac → None, .mkv → None).
+_MIME_OVERRIDES: dict[str, str] = {
+    # Audio
+    ".mp3":  "audio/mpeg",
+    ".m4a":  "audio/mp4",
+    ".aac":  "audio/aac",
+    ".ogg":  "audio/ogg",
+    ".oga":  "audio/ogg",
+    ".opus": "audio/ogg",
+    ".flac": "audio/flac",
+    ".wav":  "audio/wav",
+    ".weba": "audio/webm",
+    # Video
+    ".mp4":  "video/mp4",
+    ".webm": "video/webm",
+    ".mkv":  "video/x-matroska",
+    ".avi":  "video/x-msvideo",
+    ".mov":  "video/quicktime",
+    ".m4v":  "video/mp4",
+}
 
 CHUNK = 1024 * 512  # 512 KB chunks
 
@@ -967,8 +1087,7 @@ def view_file(request: Request, path: str):
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found.")
 
-    mime, _ = mimetypes.guess_type(str(target))
-    mime = mime or "application/octet-stream"
+    mime = _MIME_OVERRIDES.get(target.suffix.lower()) or mimetypes.guess_type(str(target))[0] or "application/octet-stream"
     file_size = target.stat().st_size
 
     # Common headers present on every response
@@ -1029,3 +1148,361 @@ async def browse_json(path: str = ""):
         raise HTTPException(status_code=404, detail="Not found.")
     entries = await run_in_threadpool(scan_directory, target)
     return {"current_path": str(target).replace("\\", "/"), "entries": entries}
+
+
+# ==============================================================================
+# Luxury Sub-Apps & Media API Endpoints
+# ==============================================================================
+
+WATCH_STATE_FILE = _data_dir / ".airnode_watch_state.json"
+
+def _load_watch_state() -> dict:
+    if WATCH_STATE_FILE.exists():
+        try:
+            with open(WATCH_STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_watch_state(data: dict):
+    try:
+        with open(WATCH_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"[WatchState Save Error] {e}")
+
+@app.get("/api/media/watch-state")
+def get_watch_state():
+    """Returns saved watch progress timestamps."""
+    return _load_watch_state()
+
+@app.post("/api/media/watch-state")
+async def save_watch_progress(request: Request):
+    """Updates watch timestamp for a video file."""
+    body = await request.json()
+    path = body.get("path")
+    current_time = body.get("currentTime", 0)
+    duration = body.get("duration", 0)
+    if not path:
+        raise HTTPException(status_code=400, detail="Missing path")
+    
+    state = _load_watch_state()
+    pct = (current_time / duration * 100) if duration > 0 else 0
+    state[path] = {
+        "currentTime": current_time,
+        "duration": duration,
+        "percent": round(pct, 1),
+        "completed": pct >= 92.0,
+        "updatedAt": time.time()
+    }
+    _save_watch_state(state)
+    return state[path]
+
+@app.get("/api/subtitles")
+def get_subtitles(path: str):
+    """Finds matching .srt or .vtt subtitle file for video and serves WebVTT."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    
+    # Check for direct vtt/srt path or sibling subtitle file
+    srt_path = target.with_suffix(".srt")
+    vtt_path = target.with_suffix(".vtt")
+
+    sub_file = None
+    if vtt_path.exists():
+        sub_file = vtt_path
+    elif srt_path.exists():
+        sub_file = srt_path
+    else:
+        # Search directory for any srt/vtt file containing same base name
+        parent = target.parent
+        if parent.exists():
+            stem = target.stem.lower()
+            for f in parent.iterdir():
+                if f.suffix.lower() in [".srt", ".vtt"] and stem in f.name.lower():
+                    sub_file = f
+                    break
+
+    if not sub_file or not sub_file.exists():
+        return Response("WEBVTT\n\n", media_type="text/vtt")
+
+    try:
+        content = sub_file.read_text(encoding="utf-8", errors="ignore")
+        if sub_file.suffix.lower() == ".srt":
+            # Convert SRT to WebVTT format
+            content = "WEBVTT\n\n" + content.replace(",", ".")
+        elif not content.startswith("WEBVTT"):
+            content = "WEBVTT\n\n" + content
+        return Response(content, media_type="text/vtt")
+    except Exception as e:
+        return Response("WEBVTT\n\n", media_type="text/vtt")
+
+import re
+
+def _parse_episode_info(filename: str, parent_dir_name: str = "") -> dict:
+    """Parses S01E01, 1x01, Ep 01 patterns and show names."""
+    # Pattern 1: S01E01 or s1e2
+    m = re.search(r'[sS](\d{1,2})[eE](\d{1,2})', filename)
+    if m:
+        season_num = int(m.group(1))
+        ep_num = int(m.group(2))
+        show_title = filename[:m.start()].strip(" .-_[]()")
+        if not show_title:
+            show_title = parent_dir_name or "TV Series"
+        return {
+            "is_series": True,
+            "show": show_title.title(),
+            "season": f"Season {season_num}",
+            "season_num": season_num,
+            "episode": f"S{season_num:02d}E{ep_num:02d}",
+            "ep_num": ep_num,
+            "title": filename
+        }
+
+    # Pattern 2: 1x01
+    m = re.search(r'(\d{1,2})x(\d{1,2})', filename)
+    if m:
+        season_num = int(m.group(1))
+        ep_num = int(m.group(2))
+        show_title = filename[:m.start()].strip(" .-_[]()")
+        if not show_title:
+            show_title = parent_dir_name or "TV Series"
+        return {
+            "is_series": True,
+            "show": show_title.title(),
+            "season": f"Season {season_num}",
+            "season_num": season_num,
+            "episode": f"S{season_num:02d}E{ep_num:02d}",
+            "ep_num": ep_num,
+            "title": filename
+        }
+
+    # Pattern 3: Ep 01 or Episode 1
+    m = re.search(r'(?:[eE][pP]?|Episode)\s*(\d{1,2})', filename, re.IGNORECASE)
+    if m:
+        ep_num = int(m.group(1))
+        show_title = parent_dir_name or filename[:m.start()].strip(" .-_[]()") or "TV Series"
+        return {
+            "is_series": True,
+            "show": show_title.title(),
+            "season": "Season 1",
+            "season_num": 1,
+            "episode": f"E{ep_num:02d}",
+            "ep_num": ep_num,
+            "title": filename
+        }
+
+    return {"is_series": False, "title": filename}
+
+@app.get("/api/cinema/scan")
+def scan_cinema_library(path: str = "", bust: int = 0):
+    """Scans and groups video files into TV Series, Seasons, Episodes, and Movies.
+    Results are cached for 30 minutes. Pass ?bust=1 to force a fresh scan."""
+    cache_key = f"cinema_scan_{path or 'all'}"
+    if not bust:
+        cached = _read_cache(cache_key)
+        if cached is not None:
+            # Always refresh continue_watching from live watch-state
+            cached["continue_watching"] = _get_continue_watching(_load_watch_state())
+            cached["from_cache"] = True
+            return cached
+
+    video_exts = {".mp4", ".mkv", ".avi", ".mov", ".webm"}
+    watch_state = _load_watch_state()
+
+    shows_map = {}
+    movies = []
+    continue_watching = []
+
+    scan_roots = [resolve_target(path)] if path else ROOTS
+    for root in scan_roots:
+        if not root or not root.exists():
+            continue
+        try:
+            for dirpath, _, filenames in os.walk(root):
+                dir_path = Path(dirpath)
+                for f in filenames:
+                    ext = Path(f).suffix.lower()
+                    if ext in video_exts:
+                        full_path = str(dir_path / f).replace("\\", "/")
+                        info = _parse_episode_info(f, dir_path.name)
+                        ws = watch_state.get(full_path, {})
+
+                        item = {
+                            "name": f,
+                            "path": full_path,
+                            "ext": ext.lstrip("."),
+                            "watchState": ws,
+                            **info
+                        }
+
+                        if ws and not ws.get("completed", False) and ws.get("currentTime", 0) > 10:
+                            continue_watching.append(item)
+
+                        if info["is_series"]:
+                            show_name = info["show"]
+                            if show_name not in shows_map:
+                                shows_map[show_name] = {"title": show_name, "seasons": {}}
+                            season_name = info["season"]
+                            if season_name not in shows_map[show_name]["seasons"]:
+                                shows_map[show_name]["seasons"][season_name] = []
+                            shows_map[show_name]["seasons"][season_name].append(item)
+                        else:
+                            movies.append(item)
+        except Exception as e:
+            print(f"[Cinema Scan Error] {e}")
+
+    # Sort episodes within seasons
+    shows_list = []
+    for s_title, s_data in shows_map.items():
+        formatted_seasons = []
+        for season_name, ep_list in s_data["seasons"].items():
+            ep_list.sort(key=lambda x: x.get("ep_num", 0))
+            formatted_seasons.append({"name": season_name, "episodes": ep_list})
+        shows_list.append({"title": s_title, "seasons": formatted_seasons})
+
+    continue_watching.sort(key=lambda x: x.get("watchState", {}).get("updatedAt", 0), reverse=True)
+
+    result = {
+        "shows": shows_list,
+        "movies": movies[:50],
+        "continue_watching": continue_watching[:10],
+        "from_cache": False
+    }
+    _write_cache(cache_key, result)
+    return result
+
+
+def _get_continue_watching(watch_state: dict) -> list:
+    """Build continue-watching list from live watch state (not cached)."""
+    items = []
+    for full_path, ws in watch_state.items():
+        if ws and not ws.get("completed", False) and ws.get("currentTime", 0) > 10:
+            items.append({"path": full_path, "name": Path(full_path).name, "watchState": ws})
+    items.sort(key=lambda x: x.get("watchState", {}).get("updatedAt", 0), reverse=True)
+    return items[:10]
+
+@app.get("/api/music/scan")
+def scan_music_library(path: str = "", bust: int = 0):
+    """Scans and groups audio files into folder playlists. Results cached 30 min.
+    Pass ?bust=1 to force a fresh scan and refresh the cache."""
+    cache_key = f"music_scan_{path or 'all'}"
+    if not bust:
+        cached = _read_cache(cache_key)
+        if cached is not None:
+            cached["from_cache"] = True
+            return cached
+
+    audio_exts = {".mp3", ".flac", ".m4a", ".wav", ".ogg", ".aac", ".opus", ".weba"}
+    folders_map = {}
+    all_tracks = []
+
+    scan_roots = [resolve_target(path)] if path else ROOTS
+    for root in scan_roots:
+        if not root or not root.exists():
+            continue
+        try:
+            for dirpath, _, filenames in os.walk(root):
+                dir_path = Path(dirpath)
+                audio_files = [f for f in filenames if Path(f).suffix.lower() in audio_exts]
+                if audio_files:
+                    folder_name = dir_path.name or "Root Audio"
+                    folder_path_str = str(dir_path).replace("\\", "/")
+                    track_items = []
+                    for f in sorted(audio_files):
+                        full_path = str(dir_path / f).replace("\\", "/")
+                        t_item = {"name": f, "title": Path(f).stem, "path": full_path, "ext": Path(f).suffix.lstrip(".")}
+                        track_items.append(t_item)
+                        all_tracks.append(t_item)
+                    folders_map[folder_name] = {"folder": folder_name, "path": folder_path_str, "tracks": track_items}
+        except Exception as e:
+            print(f"[Music Scan Error] {e}")
+
+    result = {"folders": list(folders_map.values()), "total_tracks": len(all_tracks), "from_cache": False}
+    _write_cache(cache_key, result)
+    return result
+
+
+@app.get("/api/music/folder")
+def music_folder_tracks(path: str):
+    """Returns all audio files inside a given folder tree (recursive walk of target directory).
+    Used for 'Open folder as playlist' — fast target-scoped scan."""
+    audio_exts = {".mp3", ".flac", ".m4a", ".wav", ".ogg", ".aac", ".opus", ".weba"}
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail="Folder not found.")
+
+    tracks = []
+    try:
+        for dirpath, _, filenames in os.walk(target):
+            for f in sorted(filenames, key=lambda x: x.lower()):
+                if Path(f).suffix.lower() in audio_exts:
+                    full_p = Path(dirpath) / f
+                    tracks.append({
+                        "name": f,
+                        "title": Path(f).stem,
+                        "path": str(full_p).replace("\\", "/"),
+                        "ext": Path(f).suffix.lstrip(".")
+                    })
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"folder": target.name, "path": str(target).replace("\\", "/"), "tracks": tracks}
+
+
+@app.get("/api/cinema/folder")
+def cinema_folder_videos(path: str):
+    """Returns all video files inside a given folder tree (recursive walk of target directory).
+    Used for 'Open folder' in Cinema Hub — fast target-scoped scan."""
+    video_exts = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v"}
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail="Folder not found.")
+
+    videos = []
+    try:
+        for dirpath, _, filenames in os.walk(target):
+            for f in sorted(filenames, key=lambda x: x.lower()):
+                if Path(f).suffix.lower() in video_exts:
+                    full_p = Path(dirpath) / f
+                    videos.append({
+                        "name": f,
+                        "title": Path(f).stem,
+                        "path": str(full_p).replace("\\", "/"),
+                        "ext": Path(f).suffix.lstrip(".")
+                    })
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"folder": target.name, "path": str(target).replace("\\", "/"), "videos": videos}
+
+
+# ==============================================================================
+# Sub-App HTML Page Routes
+# ==============================================================================
+
+@app.get("/apps/cinema", response_class=HTMLResponse)
+def cinema_app(request: Request):
+    """Renders Cinema & TV Series Hub sub-app."""
+    return _render(request, "cinema_hub.html", {"current_path": "/apps/cinema", "platform": sys.platform})
+
+@app.get("/apps/music", response_class=HTMLResponse)
+def music_app(request: Request):
+    """Renders Music Hub sub-app."""
+    return _render(request, "music_hub.html", {"current_path": "/apps/music", "platform": sys.platform})
+
+@app.get("/apps/gallery", response_class=HTMLResponse)
+def gallery_app(request: Request):
+    """Renders Photo Gallery sub-app."""
+    return _render(request, "gallery_hub.html", {"current_path": "/apps/gallery", "platform": sys.platform})
+
+@app.get("/apps/recent", response_class=HTMLResponse)
+def recent_app(request: Request):
+    """Renders Starred & Recent sub-app."""
+    return _render(request, "recent_hub.html", {"current_path": "/apps/recent", "platform": sys.platform})

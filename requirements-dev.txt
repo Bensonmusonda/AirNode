@@ -1,0 +1,5 @@
+# Build-time dependencies for creating the standalone executable.
+# Install with: pip install -r requirements-dev.txt
+# (Also requires the production deps from requirements.txt)
+
+pyinstaller>=6.0

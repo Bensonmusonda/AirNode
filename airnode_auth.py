@@ -7,8 +7,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from paths import get_data_dir
 
-CONFIG_PATH = Path(__file__).resolve().parent / ".airnode-auth.json"
+
+CONFIG_PATH = get_data_dir() / ".airnode-auth.json"
 COOKIE_NAME = "airnode_session"
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
@@ -48,18 +50,43 @@ def _read_config() -> AuthConfig | None:
     )
 
 
+def has_auth_config() -> bool:
+    """Return True if an auth config file already exists (PIN has been set)."""
+    return CONFIG_PATH.exists()
+
+
 def ensure_auth_config() -> AuthConfig:
+    """Return the existing auth config, or raise if none exists yet.
+
+    Unlike the previous version, this no longer auto-generates a random PIN.
+    The PIN must be created explicitly via :func:`create_pin` (typically from
+    the first-run ``/setup`` page). This prevents the "shown once" lockout
+    risk where a user could miss the auto-generated PIN in the log.
+    """
     existing = _read_config()
     if existing:
         return existing
+    raise RuntimeError(
+        "No auth configuration found. Use create_pin() to set one up "
+        "via the /setup page."
+    )
 
-    pin = f"{secrets.randbelow(1_000_000):06d}"
+
+def create_pin(pin: str) -> AuthConfig:
+    """Create a new auth config with a user-chosen PIN.
+
+    Called from the ``/setup`` page on first run. Stores only the salted
+    hash — the plaintext PIN is never persisted.
+    """
+    pin = pin.strip()
+    if not pin:
+        raise ValueError("PIN cannot be empty.")
+
     salt = secrets.token_urlsafe(24)
     config = AuthConfig(
         pin_hash=_hash_pin(pin, salt),
         pin_salt=salt,
         session_secret=secrets.token_urlsafe(48),
-        created_pin=pin,
     )
     CONFIG_PATH.write_text(
         json.dumps({
@@ -70,6 +97,17 @@ def ensure_auth_config() -> AuthConfig:
         encoding="utf-8",
     )
     return config
+
+
+def delete_auth_config() -> None:
+    """Delete the auth config file so the next launch shows /setup again.
+
+    Used by the ``--reset-pin`` CLI flag. Requires physical access to the
+    host machine, so security is preserved.
+    """
+    CONFIG_PATH.unlink(missing_ok=True)
+    with _login_attempts_lock:
+        _login_attempts.clear()
 
 
 def verify_pin(pin: str) -> bool:

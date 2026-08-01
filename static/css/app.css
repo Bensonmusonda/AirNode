@@ -1708,4 +1708,258 @@ button {
 .upload-status-badge.completed {
     background: rgba(16, 185, 129, 0.15);
     color: #10b981;
-}
+}
+
+/* ==============================================================================
+   AirNode Persistent Bottom Mini-Player Bar
+   ============================================================================== */
+.mini-player-bar {
+    position: fixed;
+    bottom: 48px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(100vw - 32px);
+    max-width: 540px;
+    height: 54px;
+    background: rgba(18, 18, 22, 0.88);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 27px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px 0 12px;
+    overflow: hidden;
+}
+
+.mini-player-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #6366f1, #a855f7);
+    transition: width 0.15s linear;
+}
+
+.mini-player-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex: 1;
+    cursor: pointer;
+}
+
+.mini-player-art {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #4f46e5, #9333ea);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.mini-player-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.mini-player-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mini-player-time {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.mini-player-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mini-btn {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.75);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, transform 0.1s;
+}
+
+.mini-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+}
+
+.mini-btn.primary {
+    background: #fff;
+    color: #111;
+}
+
+.mini-btn.primary:hover {
+    background: rgba(255, 255, 255, 0.9);
+    transform: scale(1.05);
+}
+
+/* ==============================================================================
+   Sub-Apps & Media Libraries Entry Grid (Home Page)
+   ============================================================================== */
+.subapps-section {
+    margin-top: 36px;
+    padding: 0 4px 32px;
+}
+
+.subapps-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-2);
+    margin-bottom: 14px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+}
+
+.subapps-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+}
+
+@media (min-width: 480px) {
+    .subapps-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    }
+}
+
+.subapp-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 14px;
+    aspect-ratio: 1 / 1;
+    overflow: hidden;
+    background: var(--surface-1);
+    border: 1.5px solid var(--card-border, var(--border));
+    border-radius: var(--radius-lg, 14px);
+    text-decoration: none;
+    color: var(--text);
+    box-shadow: none;
+    transition: background 0.12s ease;
+    box-sizing: border-box;
+}
+
+.subapp-card:hover {
+    background: rgba(128, 128, 128, 0.08);
+    box-shadow: none;
+    transform: none;
+}
+
+.subapp-card-icon {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    border-radius: 10px;
+    background: var(--icon-bg, rgba(99, 102, 241, 0.12));
+    color: var(--icon-color, #6366f1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 10px;
+}
+
+.subapp-card-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 3px;
+    line-height: 1.25;
+}
+
+.subapp-card-desc {
+    font-size: 11px;
+    color: var(--text-2);
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* ==============================================================================
+   Cinema Hub & Video Streaming UX
+   ============================================================================== */
+.cinema-container, .music-container {
+    padding: 24px 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.binge-overlay {
+    position: absolute;
+    bottom: 24px;
+    right: 24px;
+    background: rgba(15, 15, 20, 0.94);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 14px;
+    padding: 14px 18px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+    color: #fff;
+    max-width: 300px;
+}
+
+.binge-timer-bar {
+    height: 4px;
+    background: #6366f1;
+    border-radius: 2px;
+    transition: width 1s linear;
+}
+
+.watch-progress-bar {
+    width: 100%;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 1.5px;
+    margin-top: 4px;
+    overflow: hidden;
+}
+
+.watch-progress-fill {
+    height: 100%;
+    background: #ef4444; /* Netflix-style red progress line */
+}
+
+/* Subtitle delay slider */
+.subtitle-offset-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.8);
+}
+

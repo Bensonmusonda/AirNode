@@ -14,25 +14,58 @@ Key capabilities:
 - Full directory tree navigation
 - Local network discovery at `http://airnode.local:8000` via mDNS / Bonjour
 - QR code connection page for phone access without typing the LAN IP
-- Local PIN access gate with signed browser sessions
+- **First-run PIN setup page** — choose your own PIN, no more random codes in a log file
+- `--reset-pin` CLI flag for easy recovery if you forget your PIN
 - Instant client-side file filtering
 - File downloads with correct MIME disposition
 - Inline media viewer (images, video, audio, PDF, plain text)
 - HTTP 206 Partial Content streaming for seekable video/audio playback
+- **Standalone executable** — no Python installation needed for end users
 - Zero build-step frontend (HTMX + Alpine.js + Pico CSS)
+- **All assets bundled locally** (Lucide icons, Inter font) — works fully offline
 
 ---
 
-## Requirements
+## For End Users (Standalone Executable)
+
+### Quick Start
+
+1. Get `AirNode.exe` from the developer.
+2. Double-click it (or run it from a terminal).
+3. On first run, your browser opens automatically to a **setup page** — choose a 4-10 digit PIN.
+4. Connect your PC to a phone hotspot (or any shared Wi-Fi).
+5. On your phone, open `http://airnode.local:8000` (or scan the QR code at `http://localhost:8000/connect`).
+6. Enter the PIN you chose.
+
+### If You Forget Your PIN
+
+Open a terminal (Command Prompt or PowerShell) in the same folder as `AirNode.exe` and run:
+
+```text
+AirNode.exe --reset-pin
+```
+
+Then start AirNode again — you'll be asked to choose a new PIN.
+
+### Autostart on Login
+
+```text
+AirNode.exe --install-autostart
+AirNode.exe --uninstall-autostart
+```
+
+This registers/removes a Windows Task Scheduler task that launches AirNode silently at logon. No administrator privileges required.
+
+---
+
+## For Developers
+
+### Requirements
 
 - Python 3.11 or newer
 - Windows 10 / 11
 
----
-
-## First-Time Setup
-
-Open **PowerShell** in the project root and run:
+### First-Time Setup (Development)
 
 ```powershell
 .\setup.ps1
@@ -40,11 +73,7 @@ Open **PowerShell** in the project root and run:
 
 This creates a `.venv/` virtual environment and installs all production dependencies from `requirements.txt`.
 
----
-
-## Running the Server
-
-### Manual start / stop
+### Running the Server (Development)
 
 ```powershell
 # Start AirNode in the background (no console window)
@@ -54,54 +83,61 @@ This creates a `.venv/` virtual environment and installs all production dependen
 .\stop.ps1
 ```
 
-`start.ps1` writes stdout to `airnode.log`, stderr (uvicorn startup messages and errors) to `airnode.log.err`, and the process ID to `airnode.pid`.  
-`stop.ps1` reads the PID file and terminates the process cleanly.
+Or run directly with hot-reload:
 
-On first run, AirNode creates `.airnode-auth.json` and prints a six-digit access
-PIN to `airnode.log`. Keep that PIN for phones and other local devices. To reset
-the PIN, stop AirNode, delete `.airnode-auth.json`, then start AirNode again.
+```powershell
+.venv\Scripts\uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-### Access from another device
+### First-Run PIN Setup
+
+On first run (no `.airnode-auth.json` exists), AirNode redirects all requests to a `/setup` page where you choose your own PIN. This replaces the old flow that auto-generated a random PIN and printed it to the log.
+
+The setup page is restricted to **localhost** requests only, so a remote device on the hotspot cannot set the PIN before the host user does.
+
+### Resetting the PIN
+
+**From the CLI:**
+```powershell
+.venv\Scripts\python.exe airnode_server.py --reset-pin
+```
+
+**From the in-app menu** (if already logged in): Open the menu -> "Reset PIN". This generates a new random PIN while keeping your current session valid.
+
+### Building the Standalone Executable
+
+```powershell
+# Install build dependencies
+pip install -r requirements-dev.txt
+
+# Build the executable
+python build.py
+```
+
+The output is `dist/AirNode.exe` -- a single file with no external dependencies. Share it directly.
+
+**Note:** Some antivirus software may flag PyInstaller executables. This is a known false positive; the user may need to whitelist `AirNode.exe`.
+
+### Access from Another Device
 
 1. Connect your PC to a phone hotspot (or any shared Wi-Fi).
 2. On the PC running AirNode, open:
    ```text
    http://localhost:8000/connect
    ```
-   Then scan the QR code with your phone. The QR code uses the detected numeric
-   LAN URL because that is the most reliable option across phones.
+   Then scan the QR code with your phone.
 3. You can also try the local network name directly:
    ```text
    http://airnode.local:8000
    ```
-4. If that does not resolve on your device, use the fallback LAN URL written to
-   `airnode.log` when the server starts, or find the IP address your PC was assigned:
+4. If that does not resolve on your device, use the fallback LAN URL written to the console when the server starts, or find the IP address your PC was assigned:
    ```powershell
    ipconfig
    ```
    Look for the adapter connected to your hotspot (e.g., `192.168.43.x`).
 5. On your phone, open: `http://<PC-IP>:8000`
 
-`airnode.local` uses mDNS / Bonjour. It works well on iPhone, macOS, and many
-Android devices; the numeric IP address remains the reliable fallback.
-
----
-
-## Autostart on Login (Background Service)
-
-To have AirNode start automatically every time you log in to Windows — equivalent to a `systemd` service — run:
-
-```powershell
-.\install-autostart.ps1
-```
-
-This registers a **Windows Task Scheduler** task that launches `start.ps1` silently at logon. No administrator privileges are required.
-
-To remove the autostart entry:
-
-```powershell
-.\uninstall-autostart.ps1
-```
+`airnode.local` uses mDNS / Bonjour. It works well on iPhone, macOS, and many Android devices; the numeric IP address remains the reliable fallback.
 
 ---
 
@@ -109,24 +145,35 @@ To remove the autostart entry:
 
 ```
 AirNode/
-├── main.py                   # FastAPI application
-├── airnode_server.py         # Server launcher with LAN discovery
-├── requirements.txt          # Production dependencies
-├── setup.ps1                 # One-time venv + dependency install
-├── start.ps1                 # Start server in the background
-├── stop.ps1                  # Stop the running server
-├── install-autostart.ps1     # Register Task Scheduler autostart
-├── uninstall-autostart.ps1   # Remove autostart registration
-├── static/
-│   └── vendor/               # Vendored JS/CSS (works offline)
-│       ├── alpine.min.js
-│       ├── htmx.min.js
-│       └── pico.min.css
-└── templates/
-    ├── index.html            # Full-page layout and Alpine component
-    └── partials/
-        ├── breadcrumbs.html  # Breadcrumb navigation fragment
-        └── file_list.html    # Directory listing fragment (HTMX target)
+|-- main.py                   # FastAPI application
+|-- airnode_server.py         # Server launcher with LAN discovery + CLI
+|-- airnode_auth.py           # PIN auth, session management
+|-- paths.py                  # Frozen exe path resolution helpers
+|-- requirements.txt          # Production dependencies
+|-- requirements-dev.txt      # Build dependencies (PyInstaller)
+|-- build.spec                # PyInstaller spec
+|-- build.py                  # Build convenience script
+|-- setup.ps1                 # One-time venv + dependency install (dev)
+|-- start.ps1                 # Start server in the background (dev)
+|-- stop.ps1                  # Stop the running server (dev)
+|-- install-autostart.ps1     # Register Task Scheduler autostart (legacy)
+|-- uninstall-autostart.ps1   # Remove autostart registration (legacy)
+|-- static/
+|   |-- css/                  # App stylesheets
+|   |-- js/                   # App JavaScript
+|   `-- vendor/               # Vendored JS/CSS/fonts (works offline)
+|       |-- alpine.min.js
+|       |-- htmx.min.js
+|       |-- pico.min.css
+|       |-- lucide.min.js
+|       |-- inter-font.css
+|       `-- fonts/            # Inter TTF files
+`-- templates/
+    |-- index.html            # Full-page layout and Alpine component
+    |-- login.html            # PIN login page
+    |-- setup.html            # First-run PIN setup page
+    |-- connect.html          # QR code connection page
+    `-- partials/             # HTMX fragments
 ```
 
 ---
@@ -136,9 +183,12 @@ AirNode/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Full-page index |
+| `GET` | `/setup` | First-run PIN setup page |
+| `POST` | `/setup` | Create the initial PIN |
 | `GET` | `/login` | PIN login page |
 | `POST` | `/login` | Create a signed browser session |
 | `POST` | `/logout` | Clear the browser session |
+| `POST` | `/reset-pin` | Generate a new PIN (requires active session) |
 | `GET` | `/connect` | QR code and LAN URLs for connecting another device |
 | `GET` | `/browse?path=<p>` | Directory listing (HTMX partial or full page) |
 | `GET` | `/download?path=<p>` | Download file as attachment |
@@ -147,20 +197,19 @@ AirNode/
 
 ---
 
-## Development
+## CLI Flags
 
-Run with hot-reload during development:
+| Flag | Description |
+|------|-------------|
+| `--host <addr>` | Bind to a specific interface (default: `0.0.0.0`) |
+| `--port <n>` | Listen on a specific port (default: `8000`) |
+| `--no-mdns` | Disable mDNS/Bonjour advertisement |
+| `--reset-pin` | Delete the current PIN; next launch shows setup page |
+| `--install-autostart` | Register AirNode to start at Windows logon |
+| `--uninstall-autostart` | Remove the autostart Task Scheduler entry |
 
-```powershell
-.venv\Scripts\uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Run the normal server launcher with LAN discovery:
-
-```powershell
-.venv\Scripts\python.exe airnode_server.py --host 0.0.0.0 --port 8000
-```
+---
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details. In short: you're free to use, modify, and distribute this code, including commercially, as long as the original copyright notice is kept.
+This project is licensed under the MIT License -- see the [LICENSE](LICENSE) file for details. In short: you're free to use, modify, and distribute this code, including commercially, as long as the original copyright notice is kept.

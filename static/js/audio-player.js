@@ -63,8 +63,22 @@ function audioPlayerComponent() {
             }
         },
 
-        onPlay() { this.playing = true; },
-        onPause() { this.playing = false; },
+        onPlay() {
+            this.playing = true;
+            if (window.AirNodePlayer && this.audioEl) {
+                window.AirNodePlayer.playMedia(this.audioEl, {
+                    title: window.__airnode?.viewer?.name || 'Audio Track',
+                    path: window.__airnode?.viewer?.path || ''
+                }, 'audio');
+            }
+        },
+        onPause() {
+            this.playing = false;
+            if (window.AirNodePlayer && window.AirNodePlayer.activeMedia === this.audioEl) {
+                window.AirNodePlayer.isPlaying = false;
+                window.AirNodePlayer.notifyListeners();
+            }
+        },
 
         onLoadedMetadata() {
             this.duration = this.audioEl.duration || 0;
@@ -131,38 +145,65 @@ function audioPlayerComponent() {
         },
 
         navigate(direction, autoplay = false) {
-            const tracks = this.getAudioList();
-            if (tracks.length < 2) return false;
+            // ── Prefer AirNodePlayer queue (Music Hub playlists & folders) ──
+            if (window.AirNodePlayer && window.AirNodePlayer.queue.length > 1) {
+                const player = window.AirNodePlayer;
+                const newIdx = player.queueIndex + direction;
+                if (newIdx < 0 || newIdx >= player.queue.length) return false;
+                player.queueIndex = newIdx;
+                const next = player.queue[newIdx];
+                if (!next) return false;
 
+                // Update the Alpine viewer to trigger reactive src swap
+                if (window.__airnode) {
+                    window.__airnode.viewer = {
+                        name: next.title || next.name,
+                        path: next.path,
+                        kind: 'audio'
+                    };
+                }
+
+                this.loading = true;
+                this.error   = false;
+                this.currentTime = 0;
+                this.duration    = 0;
+
+                if (autoplay) {
+                    this.$nextTick(() => {
+                        setTimeout(() => { this.audioEl?.play().catch(() => {}); }, 80);
+                    });
+                }
+                return true;
+            }
+
+            // ── Fallback: scan .file-row elements in file browser view ──
+            const audioExts = ['mp3', 'ogg', 'wav', 'm4a', 'aac', 'flac', 'opus', 'weba'];
+            const tracks = Array.from(document.querySelectorAll('.file-row'))
+                .filter(row => audioExts.includes((row.dataset.ext || '').toLowerCase()))
+                .map(row => ({ name: row.dataset.name, path: row.dataset.path }))
+                .filter(item => item.path);
+
+            if (tracks.length < 2) return false;
             if (!window.__airnode || !window.__airnode.viewer) return false;
             const currentPath = window.__airnode.viewer.path;
-
             const idx = tracks.findIndex(t => t.path === currentPath);
             if (idx === -1) return false;
 
             const nextIdx = (idx + direction + tracks.length) % tracks.length;
             const next = tracks[nextIdx];
 
-            window.__airnode.viewer = {
-                name: next.name,
-                path: next.path,
-                kind: 'audio',
-            };
+            window.__airnode.viewer = { name: next.name, path: next.path, kind: 'audio' };
 
             this.loading = true;
-            this.error = false;
+            this.error   = false;
             this.currentTime = 0;
-            this.duration = 0;
+            this.duration    = 0;
 
             if (autoplay) {
-                // Wait for the new src to bind then play
                 this.$nextTick(() => {
-                    setTimeout(() => {
-                        this.audioEl?.play().catch(() => {});
-                    }, 50);
+                    setTimeout(() => { this.audioEl?.play().catch(() => {}); }, 50);
                 });
             }
-
             return true;
         },
 

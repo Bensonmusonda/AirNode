@@ -2,10 +2,14 @@ import argparse
 import json
 import os
 import socket
+import subprocess
+import sys
+import webbrowser
 from contextlib import AbstractContextManager
 from pathlib import Path
 
-from airnode_auth import ensure_auth_config
+from airnode_auth import delete_auth_config, has_auth_config
+from paths import get_resource_dir, get_data_dir, is_frozen
 
 try:
     from zeroconf import IPVersion, ServiceInfo, Zeroconf
@@ -18,7 +22,7 @@ except ImportError:  # pragma: no cover - exercised only when deps are missing
 SERVICE_TYPE = "_http._tcp.local."
 SERVICE_NAME = "AirNode._http._tcp.local."
 HOSTNAME = "airnode.local."
-GENERATED_STATIC_DIR = Path(__file__).resolve().parent / "static" / "generated"
+GENERATED_STATIC_DIR = get_resource_dir() / "static" / "generated"
 QR_FILENAME = "airnode-qr.svg"
 
 
@@ -101,10 +105,9 @@ class MdnsAdvertisement(AbstractContextManager):
 
 def print_access_urls(advertisement: MdnsAdvertisement) -> None:
     print("AirNode is starting.")
-    access_pin = os.environ.get("AIRNODE_CREATED_PIN")
-    if access_pin:
-        print(f"Access PIN: {access_pin}")
-        print("Save this PIN; it is shown only when the auth config is created.")
+
+    if not has_auth_config():
+        print("First run detected — open the setup page to create your PIN.")
     else:
         print("Access gate: enabled.")
 
@@ -158,8 +161,73 @@ def publish_connection_details(advertisement: MdnsAdvertisement) -> None:
     os.environ["AIRNODE_QR_PATH"] = qr_path or ""
 
 
+# ---------------------------------------------------------------------------
+# CLI helper commands
+# ---------------------------------------------------------------------------
+
+def do_reset_pin() -> None:
+    """Delete the auth config so the next launch shows the /setup page."""
+    delete_auth_config()
+    print("PIN reset complete.")
+    print("Start AirNode again and you'll be asked to choose a new PIN.")
+    sys.exit(0)
+
+
+def do_install_autostart() -> None:
+    """Register a Windows Task Scheduler task to start AirNode at logon."""
+    exe = sys.executable if is_frozen() else sys.argv[0]
+    task_name = "AirNode"
+
+    # Remove any previous registration
+    subprocess.run(
+        ["schtasks", "/Delete", "/TN", task_name, "/F"],
+        capture_output=True,
+    )
+
+    result = subprocess.run(
+        [
+            "schtasks", "/Create",
+            "/TN", task_name,
+            "/TR", f'"{exe}"',
+            "/SC", "ONLOGON",
+            "/RL", "LIMITED",
+            "/F",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode == 0:
+        print("AirNode autostart registered in Task Scheduler.")
+        print("It will start automatically the next time you log in.")
+        print("Remove with: AirNode.exe --uninstall-autostart")
+    else:
+        print(f"Failed to register autostart task: {result.stderr.strip()}")
+        sys.exit(1)
+
+    sys.exit(0)
+
+
+def do_uninstall_autostart() -> None:
+    """Remove the AirNode autostart task from Task Scheduler."""
+    task_name = "AirNode"
+    result = subprocess.run(
+        ["schtasks", "/Delete", "/TN", task_name, "/F"],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode == 0:
+        print("AirNode autostart task removed.")
+    else:
+        print("No scheduled task named 'AirNode' found.")
+    sys.exit(0)
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run AirNode with LAN discovery.")
+    parser = argparse.ArgumentParser(
+        description="Run AirNode with LAN discovery, or perform maintenance tasks."
+    )
     parser.add_argument("--host", default="0.0.0.0", help="Host/interface to bind.")
     parser.add_argument("--port", default=8000, type=int, help="Port to listen on.")
     parser.add_argument(
@@ -167,21 +235,50 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable mDNS/Bonjour advertisement.",
     )
+    parser.add_argument(
+        "--reset-pin",
+        action="store_true",
+        help="Delete the current PIN so the next launch shows the setup page.",
+    )
+    parser.add_argument(
+        "--install-autostart",
+        action="store_true",
+        help="Register AirNode to start automatically at Windows logon.",
+    )
+    parser.add_argument(
+        "--uninstall-autostart",
+        action="store_true",
+        help="Remove the AirNode autostart entry from Task Scheduler.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    auth_config = ensure_auth_config()
-    if auth_config.created_pin:
-        os.environ["AIRNODE_CREATED_PIN"] = auth_config.created_pin
+
+    # Handle CLI helper commands (these exit and never start the server)
+    if args.reset_pin:
+        do_reset_pin()
+    if args.install_autostart:
+        do_install_autostart()
+    if args.uninstall_autostart:
+        do_uninstall_autostart()
+
+    # Auto-open browser on first run (no PIN set yet)
+    first_run = not has_auth_config()
+    if first_run:
+        webbrowser.open(f"http://localhost:{args.port}/setup")
 
     import uvicorn
 
     with MdnsAdvertisement(port=args.port, enabled=not args.no_mdns) as advertisement:
         publish_connection_details(advertisement)
         print_access_urls(advertisement)
-        uvicorn.run("main:app", host=args.host, port=args.port)
+
+        # Disable reload when frozen (PyInstaller) — reload spawns a new
+        # process and doesn't work inside a frozen executable.
+        reload = not is_frozen()
+        uvicorn.run("main:app", host=args.host, port=args.port, reload=reload)
 
 
 if __name__ == "__main__":

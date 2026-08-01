@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AirNode Photo Gallery Hub</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
+    <link rel="stylesheet" href="/static/css/viewer.css" />
+    <link rel="stylesheet" href="/static/vendor/inter-font.css" />
+    <script src="/static/vendor/lucide.min.js" defer></script>
+    <script src="/static/vendor/htmx.min.js" defer></script>
+    <script src="/static/js/media-player.js"></script>
+    <script src="/static/js/image-viewer.js"></script>
+    <script src="/static/vendor/alpine.min.js" defer></script>
+</head>
+<body>
+    <div class="layout" x-data="{
+        images: [],
+        loading: true,
+        viewer: null,
+
+        init() {
+            window.__airnode = this;
+            this.fetchGallery();
+            document.addEventListener('DOMContentLoaded', () => { if (window.lucide) lucide.createIcons(); });
+        },
+        fetchGallery() {
+            this.loading = true;
+            fetch('/api/browse')
+                .then(r => r.json())
+                .then(() => {
+                    this.loading = false;
+                    this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                });
+        },
+        openViewer(file) {
+            this.viewer = { name: file.name, path: file.path, kind: 'img' };
+        },
+        closeViewer() {
+            this.viewer = null;
+        }
+    }">
+        <header class="header">
+            <a href="/" class="header-icon-btn" aria-label="Back to home">
+                <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
+            </a>
+            <span class="wordmark" style="font-size:16px; font-weight:700; color:var(--text);">Photo Gallery</span>
+            <div style="flex:1;"></div>
+        </header>
+
+        <main class="list-wrap" style="background:var(--bg);">
+            <div class="cinema-container">
+                <h3 style="font-size:16px; font-weight:600; color:var(--text); margin-bottom:14px; display:flex; align-items:center; gap:8px;">
+                    <i data-lucide="image" style="color:#10b981; width:18px; height:18px;"></i>
+                    Photo Timeline & Lightbox
+                </h3>
+                <div class="subapp-card" style="padding:24px; text-align:center;">
+                    <i data-lucide="image" style="width:48px; height:48px; color:#10b981; margin-bottom:12px;"></i>
+                    <h4 style="font-size:16px; font-weight:600; margin:0 0 6px;">Photo Gallery Ready</h4>
+                    <p style="font-size:13px; color:var(--text-2); margin:0;">Browse image folders and double-tap zoom with pinch gestures in any directory view.</p>
+                </div>
+            </div>
+        </main>
+
+        {% include "partials/mini_player.html" %}
+    </div>
+</body>
+</html>

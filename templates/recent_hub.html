@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AirNode Starred & Recent Hub</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
+    <link rel="stylesheet" href="/static/css/viewer.css" />
+    <link rel="stylesheet" href="/static/vendor/inter-font.css" />
+    <script src="/static/vendor/lucide.min.js" defer></script>
+    <script src="/static/vendor/htmx.min.js" defer></script>
+    <script src="/static/js/media-player.js"></script>
+    <script src="/static/vendor/alpine.min.js" defer></script>
+</head>
+<body>
+    <div class="layout" x-data="{
+        recentStreams: [],
+
+        init() {
+            window.__airnode = this;
+            fetch('/api/media/watch-state')
+                .then(r => r.json())
+                .then(data => {
+                    this.recentStreams = Object.entries(data).map(([path, info]) => ({
+                        path,
+                        name: path.split('/').pop(),
+                        ...info
+                    })).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+                });
+            document.addEventListener('DOMContentLoaded', () => { if (window.lucide) lucide.createIcons(); });
+        }
+    }">
+        <header class="header">
+            <a href="/" class="header-icon-btn" aria-label="Back to home">
+                <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
+            </a>
+            <span class="wordmark" style="font-size:16px; font-weight:700; color:var(--text);">Starred &amp; Recent</span>
+            <div style="flex:1;"></div>
+        </header>
+
+        <main class="list-wrap" style="background:var(--bg);">
+            <div class="cinema-container">
+                <h3 style="font-size:16px; font-weight:600; color:var(--text); margin-bottom:14px; display:flex; align-items:center; gap:8px;">
+                    <i data-lucide="clock" style="color:#f59e0b; width:18px; height:18px;"></i>
+                    Recent Stream History
+                </h3>
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                    <template x-for="item in recentStreams" :key="item.path">
+                        <div class="subapp-card" style="padding:14px; display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; align-items:center; gap:12px;">
+                                <i data-lucide="play-circle" style="color:#f59e0b; width:20px; height:20px;"></i>
+                                <div>
+                                    <div style="font-size:14px; font-weight:600;" x-text="item.name"></div>
+                                    <div style="font-size:12px; color:var(--text-2);" x-text="item.path"></div>
+                                </div>
+                            </div>
+                            <span style="font-size:12px; font-weight:600; color:var(--text-2);" x-text="`${item.percent || 0}% watched`"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </main>
+
+        {% include "partials/mini_player.html" %}
+    </div>
+</body>
+</html>

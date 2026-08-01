@@ -15,6 +15,7 @@ airnode.log.err
 static/generated/
 .airnode-auth.json
 .airnode_upload_temp/
+.airnode_cache/
 
 
 
@@ -24,3 +25,11 @@ static/generated/
 # OS artefacts
 Thumbs.db
 .DS_Store
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.bak
+
+# markdown files
+LUXURY_FEATURES_CONTEXT.md

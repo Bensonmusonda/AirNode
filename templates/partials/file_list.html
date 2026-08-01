@@ -139,4 +139,54 @@
         <span>Empty directory</span>
     </div>
     {% endif %}
+
+    {% if current_path in ['/', ''] %}
+    <div class="subapps-section">
+        <div class="subapps-header">
+            <i data-lucide="layout-grid" style="width:16px;height:16px;"></i>
+            <span>Sub-Apps & Media Libraries</span>
+        </div>
+        <div class="subapps-grid">
+            <a href="/apps/music" class="subapp-card" style="--icon-bg: rgba(236, 72, 153, 0.15); --icon-color: #ec4899; --card-border: rgba(236, 72, 153, 0.4);">
+                <div class="subapp-card-icon">
+                    <i data-lucide="music" style="width:20px;height:20px;"></i>
+                </div>
+                <div>
+                    <div class="subapp-card-title">Music Hub</div>
+                    <div class="subapp-card-desc">Auto-index tracks, playlists & sleep timer.</div>
+                </div>
+            </a>
+
+            <a href="/apps/cinema" class="subapp-card" style="--icon-bg: rgba(99, 102, 241, 0.15); --icon-color: #6366f1; --card-border: rgba(99, 102, 241, 0.4);">
+                <div class="subapp-card-icon">
+                    <i data-lucide="clapperboard" style="width:20px;height:20px;"></i>
+                </div>
+                <div>
+                    <div class="subapp-card-title">Cinema & TV Hub</div>
+                    <div class="subapp-card-desc">TV Series, Binge mode & subtitle sync.</div>
+                </div>
+            </a>
+
+            <a href="/apps/gallery" class="subapp-card" style="--icon-bg: rgba(16, 185, 129, 0.15); --icon-color: #10b981; --card-border: rgba(16, 185, 129, 0.4);">
+                <div class="subapp-card-icon">
+                    <i data-lucide="image" style="width:20px;height:20px;"></i>
+                </div>
+                <div>
+                    <div class="subapp-card-title">Photo Gallery</div>
+                    <div class="subapp-card-desc">Timeline grid & pinch zoom lightbox.</div>
+                </div>
+            </a>
+
+            <a href="/apps/recent" class="subapp-card" style="--icon-bg: rgba(245, 158, 11, 0.15); --icon-color: #f59e0b; --card-border: rgba(245, 158, 11, 0.4);">
+                <div class="subapp-card-icon">
+                    <i data-lucide="star" style="width:20px;height:20px;"></i>
+                </div>
+                <div>
+                    <div class="subapp-card-title">Starred & Recent</div>
+                    <div class="subapp-card-desc">Quick access favorites & recent history.</div>
+                </div>
+            </a>
+        </div>
+    </div>
+    {% endif %}
 </div>

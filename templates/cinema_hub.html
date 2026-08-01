@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AirNode Cinema Hub</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
+    <link rel="stylesheet" href="/static/css/viewer.css" />
+    <link rel="stylesheet" href="/static/css/audio-player.css" />
+    <link rel="stylesheet" href="/static/vendor/inter-font.css" />
+    <script src="/static/vendor/lucide.min.js" defer></script>
+    <script src="/static/vendor/htmx.min.js" defer></script>
+    <script src="/static/js/media-player.js"></script>
+    <script src="/static/js/video-player.js"></script>
+    <script src="/static/js/image-viewer.js"></script>
+    <script src="/static/js/audio-player.js"></script>
+    <script src="/static/vendor/alpine.min.js" defer></script>
+    <style>
+        .cinema-toolbar {
+            display: flex;
+            gap: 8px;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface-1);
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .cinema-toolbar::-webkit-scrollbar { display: none; }
+
+        .toolbar-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1.5px solid var(--border);
+            background: var(--surface-1);
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.12s, border-color 0.12s;
+            font-family: inherit;
+        }
+        .toolbar-btn:hover { background: rgba(128,128,128,0.1); }
+        .toolbar-btn.accent {
+            background: rgba(99, 102, 241, 0.1);
+            border-color: rgba(99, 102, 241, 0.4);
+            color: #6366f1;
+        }
+        .toolbar-btn.accent:hover { background: rgba(99, 102, 241, 0.18); }
+
+        .folder-browser {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        .folder-browser-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            cursor: pointer;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: background 0.1s;
+        }
+        .folder-browser-item:hover { background: rgba(128,128,128,0.1); }
+
+        .playlist-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 11px 14px;
+            border-radius: 10px;
+            border: 1.5px solid var(--border);
+            background: var(--surface-1);
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        .playlist-row:hover { background: rgba(128,128,128,0.08); }
+
+        .lib-section-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            color: var(--text-2);
+            margin: 22px 0 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .cache-badge {
+            font-size: 11px;
+            color: var(--text-2);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 20px;
+            background: var(--surface-2);
+        }
+
+        .video-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+        .video-row:hover { background: rgba(128,128,128,0.08); }
+        .video-row-num { font-size: 12px; color: var(--text-2); width: 22px; text-align: right; flex-shrink: 0; }
+
+        .folder-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            gap: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="layout" x-data="{
+        /* ── state ─────────────────────── */
+        shows: [],
+        movies: [],
+        continueWatching: [],
+        loading: false,
+        libLoaded: false,
+        fromCache: false,
+        selectedShow: null,
+        selectedSeason: null,
+
+        /* playlists & open folder */
+        playlists: JSON.parse(localStorage.getItem('airnode_video_playlists') || '[]'),
+        selectedPlaylist: null,
+        showNewPlaylistModal: false,
+        newPlaylistName: '',
+
+        selectedFolder: null,
+
+        showFolderBrowser: false,
+        browserMode: 'folder', /* 'folder' | 'playlist' */
+        browserPath: '/',
+        browserItems: [],
+        browserLoading: false,
+        browserHistory: [],
+
+        viewer: null,
+
+        /* ── init ──────────────────────── */
+        init() {
+            window.__airnode = this;
+            this.playlists = JSON.parse(localStorage.getItem('airnode_video_playlists') || '[]');
+            this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+        },
+
+        /* ── library ───────────────────── */
+        fetchLibrary(bust) {
+            this.loading = true;
+            const url = bust ? '/api/cinema/scan?bust=1' : '/api/cinema/scan';
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {
+                    this.shows          = data.shows || [];
+                    this.movies         = data.movies || [];
+                    this.continueWatching = data.continue_watching || [];
+                    this.fromCache      = !!data.from_cache;
+                    this.libLoaded      = true;
+                    this.loading        = false;
+                    this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                })
+                .catch(() => { this.loading = false; });
+        },
+
+        /* ── folder browser ────────────── */
+        openFolderBrowser(mode = 'folder') {
+            this.browserMode = mode;
+            this.browserHistory = [];
+            this.browserPath = '/';
+            this.showFolderBrowser = true;
+            this.browseTo('/');
+        },
+        browseTo(path) {
+            this.browserLoading = true;
+            this.browserPath = path;
+            const url = (path === '/' || path === '')
+                ? '/api/browse'
+                : '/api/browse?path=' + encodeURIComponent(path);
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.roots) {
+                        this.browserItems = data.roots.map(r => ({ name: r, path: r, type: 'directory' }));
+                    } else {
+                        this.browserItems = (data.entries || []).filter(e => e.type === 'directory');
+                    }
+                    this.browserLoading = false;
+                    this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                })
+                .catch(() => { this.browserLoading = false; });
+        },
+        browserEnter(item) {
+            this.browserHistory.push(this.browserPath);
+            this.browseTo(item.path);
+        },
+        browserBack() {
+            if (this.browserHistory.length > 0) this.browseTo(this.browserHistory.pop());
+        },
+        selectVideoFolder(item) {
+            fetch('/api/cinema/folder?path=' + encodeURIComponent(item.path))
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.videos || data.videos.length === 0) {
+                        alert('No video files found inside that folder.');
+                        return;
+                    }
+                    this.showFolderBrowser = false;
+                    if (this.browserMode === 'folder') {
+                        this.selectedFolder = data;
+                    } else {
+                        const name = data.folder || item.name;
+                        const pl = { id: Date.now(), name, videos: data.videos };
+                        this.playlists.push(pl);
+                        this.savePlaylists();
+                        this.selectedPlaylist = pl;
+                    }
+                    this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                });
+        },
+
+        /* ── playlists ─────────────────── */
+        savePlaylists() {
+            localStorage.setItem('airnode_video_playlists', JSON.stringify(this.playlists));
+        },
+        createEmptyPlaylist() {
+            if (!this.newPlaylistName.trim()) return;
+            const pl = { id: Date.now(), name: this.newPlaylistName.trim(), videos: [] };
+            this.playlists.push(pl);
+            this.savePlaylists();
+            this.newPlaylistName = '';
+            this.showNewPlaylistModal = false;
+            this.selectedPlaylist = pl;
+            this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+        },
+        deletePlaylist(pl) {
+            this.playlists = this.playlists.filter(p => p.id !== pl.id);
+            this.savePlaylists();
+            if (this.selectedPlaylist && this.selectedPlaylist.id === pl.id) this.selectedPlaylist = null;
+        },
+
+        /* ── show/season nav ───────────── */
+        openShow(show) {
+            this.selectedShow = show;
+            this.selectedSeason = show.seasons && show.seasons.length > 0 ? show.seasons[0] : null;
+            this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+        },
+
+        /* ── playback ──────────────────── */
+        openViewer(file) {
+            this.viewer = { name: file.name || file.title, path: file.path, kind: 'video' };
+        },
+        playVideo(item) {
+            this.openViewer({ name: item.name || item.title, path: item.path });
+        },
+        playFolder(folder, index = 0) {
+            if (folder?.videos && folder.videos[index]) {
+                if (window.AirNodePlayer) window.AirNodePlayer.setQueue(folder.videos, index);
+                this.playVideo(folder.videos[index]);
+            }
+        },
+        playPlaylist(pl, index = 0) {
+            if (pl?.videos && pl.videos[index]) {
+                if (window.AirNodePlayer) window.AirNodePlayer.setQueue(pl.videos, index);
+                this.playVideo(pl.videos[index]);
+            }
+        },
+        closeViewer() { this.viewer = null; }
+    }">
+        <!-- ── Header ──────────────────────────────────────────────── -->
+        <header class="header">
+            <a href="/" class="header-icon-btn" aria-label="Back to home">
+                <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
+            </a>
+            <span class="wordmark" style="font-size:16px; font-weight:700; color:var(--text);">Cinema Hub</span>
+            <div style="flex:1;"></div>
+            <button class="header-icon-btn" x-on:click="fetchLibrary(true)" aria-label="Refresh library">
+                <i data-lucide="refresh-cw" style="width:18px;height:18px;"></i>
+            </button>
+        </header>
+
+        <!-- ── Quick-action toolbar ────────────────────────────────── -->
+        <div class="cinema-toolbar">
+            <button class="toolbar-btn accent" x-on:click="openFolderBrowser('folder')">
+                <i data-lucide="folder-open" style="width:15px;height:15px;"></i>
+                Open folder
+            </button>
+            <button class="toolbar-btn" x-on:click="showNewPlaylistModal = true">
+                <i data-lucide="plus" style="width:15px;height:15px;"></i>
+                New playlist
+            </button>
+            <button class="toolbar-btn" x-on:click="openFolderBrowser('playlist')">
+                <i data-lucide="folder-plus" style="width:15px;height:15px;"></i>
+                Folder → playlist
+            </button>
+            <button class="toolbar-btn" x-show="!libLoaded && !loading" x-on:click="fetchLibrary(false)">
+                <i data-lucide="library" style="width:15px;height:15px;"></i>
+                Scan library
+            </button>
+            <button class="toolbar-btn" x-show="libLoaded" x-on:click="fetchLibrary(true)">
+                <i data-lucide="refresh-cw" style="width:15px;height:15px;"></i>
+                Refresh scan
+            </button>
+        </div>
+
+        <main class="list-wrap" style="background:var(--bg);">
+            <div class="cinema-container">
+
+                <!-- ── Video Playlists section ────────────────────── -->
+                <template x-if="playlists.length > 0 && selectedPlaylist === null && selectedFolder === null && selectedShow === null">
+                    <div>
+                        <div class="lib-section-label">Your Video Playlists</div>
+                        <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:24px;">
+                            <template x-for="pl in playlists" :key="pl.id">
+                                <div class="playlist-row" x-on:click="selectedPlaylist = pl; $nextTick(() => { if(window.lucide) lucide.createIcons(); })">
+                                    <div style="display:flex; align-items:center; gap:12px;">
+                                        <div style="width:34px;height:34px;border-radius:8px;background:rgba(99,102,241,0.12);color:#6366f1;display:flex;align-items:center;justify-content:center;">
+                                            <i data-lucide="clapperboard" style="width:16px;height:16px;"></i>
+                                        </div>
+                                        <div>
+                                            <div style="font-size:14px;font-weight:600;" x-text="pl.name"></div>
+                                            <div style="font-size:12px;color:var(--text-2);" x-text="`${pl.videos.length} video${pl.videos.length===1?'':'s'}`"></div>
+                                        </div>
+                                    </div>
+                                    <div style="display:flex;align-items:center;gap:6px;">
+                                        <button class="header-icon-btn" style="width:28px;height:28px;" x-on:click.stop="playPlaylist(pl, 0)">
+                                            <i data-lucide="play" style="width:14px;height:14px;color:#6366f1;"></i>
+                                        </button>
+                                        <button class="header-icon-btn" style="width:28px;height:28px;" x-on:click.stop="deletePlaylist(pl)">
+                                            <i data-lucide="trash-2" style="width:13px;height:13px;color:var(--text-2);"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Inside a video playlist ───────────────────── -->
+                <template x-if="selectedPlaylist !== null">
+                    <div>
+                        <button class="modal-btn" x-on:click="selectedPlaylist = null; $nextTick(()=>{if(window.lucide)lucide.createIcons();})" style="margin-bottom:16px;">
+                            <i data-lucide="arrow-left" style="width:14px;height:14px;margin-right:4px;"></i>Back
+                        </button>
+                        <div class="folder-title-row">
+                            <h2 x-text="selectedPlaylist.name" style="font-size:20px;font-weight:700;color:var(--text);margin:0;"></h2>
+                            <button class="toolbar-btn accent" style="font-size:12px;padding:6px 12px;" x-on:click="playPlaylist(selectedPlaylist, 0)" x-show="selectedPlaylist.videos.length > 0">
+                                <i data-lucide="play" style="width:13px;height:13px;"></i> Play all
+                            </button>
+                        </div>
+                        <template x-if="selectedPlaylist.videos.length === 0">
+                            <p style="font-size:13px;color:var(--text-2);text-align:center;padding:32px 0;">
+                                No videos yet. Use <strong>Folder → playlist</strong> to add video files.
+                            </p>
+                        </template>
+                        <div style="display:flex;flex-direction:column;gap:2px;">
+                            <template x-for="(video, idx) in selectedPlaylist.videos" :key="video.path">
+                                <div class="video-row" x-on:click="playPlaylist(selectedPlaylist, idx)">
+                                    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                                        <span class="video-row-num" x-text="idx+1"></span>
+                                        <i data-lucide="film" style="width:15px;height:15px;color:#6366f1;flex-shrink:0;"></i>
+                                        <span style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="video.title || video.name"></span>
+                                    </div>
+                                    <i data-lucide="play" style="width:14px;height:14px;opacity:0.45;flex-shrink:0;"></i>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Open-folder mode ───────────────────────────────── -->
+                <template x-if="selectedFolder !== null && selectedShow === null && selectedPlaylist === null">
+                    <div>
+                        <button class="modal-btn" x-on:click="selectedFolder = null; $nextTick(()=>{if(window.lucide)lucide.createIcons();})" style="margin-bottom:16px;">
+                            <i data-lucide="arrow-left" style="width:14px;height:14px;margin-right:4px;"></i>Back
+                        </button>
+                        <div class="folder-title-row">
+                            <h2 x-text="selectedFolder.folder" style="font-size:20px;font-weight:700;color:var(--text);margin:0;"></h2>
+                            <button class="toolbar-btn accent" style="font-size:12px;padding:6px 12px;" x-on:click="playFolder(selectedFolder, 0)">
+                                <i data-lucide="play" style="width:13px;height:13px;"></i> Play all
+                            </button>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:2px;">
+                            <template x-for="(video, idx) in selectedFolder.videos" :key="video.path">
+                                <div class="video-row" x-on:click="playFolder(selectedFolder, idx)">
+                                    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                                        <span class="video-row-num" x-text="idx+1"></span>
+                                        <i data-lucide="film" style="width:15px;height:15px;color:#6366f1;flex-shrink:0;"></i>
+                                        <span style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="video.title || video.name"></span>
+                                    </div>
+                                    <span style="font-size:11px;color:var(--text-2);flex-shrink:0;" x-text="video.ext?.toUpperCase()"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Library content ─────────────────────────────────── -->
+                <template x-if="selectedFolder === null && selectedPlaylist === null">
+                    <div>
+
+                        <!-- Loading spinner -->
+                        <div x-show="loading" style="display:flex;align-items:center;gap:10px;padding:32px 0;color:var(--text-2);font-size:13px;">
+                            <div class="spinner" style="width:18px;height:18px;border-width:2px;"></div>
+                            Scanning your drives for video files…
+                        </div>
+
+                        <!-- Empty / not yet scanned -->
+                        <div x-show="!loading && !libLoaded" style="text-align:center;padding:48px 0;color:var(--text-2);font-size:13px;">
+                            <i data-lucide="clapperboard" style="width:36px;height:36px;opacity:0.3;display:block;margin:0 auto 12px;"></i>
+                            Tap <strong>Scan library</strong> to index your videos &amp; TV shows,<br>
+                            or <strong>Open folder</strong> to play a specific folder right now.
+                        </div>
+
+                        <template x-if="libLoaded">
+                            <div>
+
+                                <!-- Continue Watching -->
+                                <div x-show="continueWatching.length > 0" style="margin-bottom:28px;">
+                                    <div class="lib-section-label">
+                                        <i data-lucide="play-circle" style="width:13px;height:13px;color:#ef4444;"></i>
+                                        Continue Watching
+                                    </div>
+                                    <div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none;">
+                                        <template x-for="item in continueWatching" :key="item.path">
+                                            <div x-on:click="playVideo(item)" style="width:180px;flex-shrink:0;cursor:pointer;border-radius:12px;border:1.5px solid var(--border);background:var(--surface-1);overflow:hidden;transition:background 0.12s;" class="hover-grey">
+                                                <div style="width:100%;height:100px;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;position:relative;">
+                                                    <i data-lucide="film" style="width:28px;height:28px;color:rgba(255,255,255,0.35);"></i>
+                                                    <div class="watch-progress-bar" style="position:absolute;bottom:0;left:0;right:0;">
+                                                        <div class="watch-progress-fill" :style="`width:${item.watchState?.percent||0}%`"></div>
+                                                    </div>
+                                                </div>
+                                                <div style="padding:10px 10px 12px;">
+                                                    <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="item.name"></div>
+                                                    <div style="font-size:11px;color:var(--text-2);margin-top:2px;" x-text="`${item.watchState?.percent||0}% watched`"></div>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                <!-- TV Shows -->
+                                <div x-show="shows.length > 0 && selectedShow === null">
+                                    <div class="lib-section-label">
+                                        <i data-lucide="tv" style="width:13px;height:13px;color:#6366f1;"></i>
+                                        TV Series &amp; Shows
+                                        <span class="cache-badge" x-show="fromCache">
+                                            <i data-lucide="database" style="width:10px;height:10px;"></i> cached
+                                        </span>
+                                    </div>
+                                    <div class="subapps-grid" style="margin-bottom:28px;">
+                                        <template x-for="show in shows" :key="show.title">
+                                            <div class="subapp-card" x-on:click="openShow(show)"
+                                                 style="cursor:pointer;--card-border:rgba(99,102,241,0.35);">
+                                                <div class="subapp-card-icon" style="background:rgba(99,102,241,0.12);color:#6366f1;">
+                                                    <i data-lucide="tv" style="width:18px;height:18px;"></i>
+                                                </div>
+                                                <div>
+                                                    <div class="subapp-card-title" x-text="show.title"></div>
+                                                    <div class="subapp-card-desc" x-text="`${show.seasons.length} Season${show.seasons.length===1?'':'s'}`"></div>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                <!-- Season & Episode View -->
+                                <div x-show="selectedShow !== null">
+                                    <button class="modal-btn" x-on:click="selectedShow = null; $nextTick(()=>{if(window.lucide)lucide.createIcons();})" style="margin-bottom:16px;">
+                                        <i data-lucide="arrow-left" style="width:14px;height:14px;margin-right:4px;"></i>Back to Shows
+                                    </button>
+                                    <h2 x-text="selectedShow?.title" style="font-size:20px;font-weight:700;color:var(--text);margin-bottom:16px;"></h2>
+                                    <div class="filter-tabs" style="margin-bottom:16px;">
+                                        <template x-for="season in selectedShow?.seasons || []" :key="season.name">
+                                            <button class="filter-tab-btn" :class="{'active': selectedSeason?.name === season.name}" x-on:click="selectedSeason = season">
+                                                <span x-text="season.name"></span>
+                                            </button>
+                                        </template>
+                                    </div>
+                                    <div style="display:flex;flex-direction:column;gap:2px;">
+                                        <template x-for="(ep, idx) in selectedSeason?.episodes || []" :key="ep.path">
+                                            <div class="video-row" x-on:click="playVideo(ep)">
+                                                <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
+                                                    <span class="video-row-num" x-text="idx+1"></span>
+                                                    <div style="min-width:0;flex:1;">
+                                                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+                                                            <span style="font-size:11px;font-weight:700;color:#6366f1;background:rgba(99,102,241,0.12);padding:1px 6px;border-radius:4px;" x-text="ep.episode || `Ep ${idx+1}`"></span>
+                                                            <span x-show="ep.watchState?.completed" style="font-size:10px;color:#10b981;font-weight:600;">Watched</span>
+                                                        </div>
+                                                        <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="ep.title || ep.name"></div>
+                                                        <div class="watch-progress-bar" x-show="ep.watchState?.percent > 0" style="margin-top:5px;width:100%;">
+                                                            <div class="watch-progress-fill" :style="`width:${ep.watchState?.percent}%`"></div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <i data-lucide="play" style="width:14px;height:14px;opacity:0.4;flex-shrink:0;"></i>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                <!-- Movies / standalone videos -->
+                                <div x-show="movies.length > 0 && selectedShow === null" style="margin-top:8px;">
+                                    <div class="lib-section-label">
+                                        <i data-lucide="film" style="width:13px;height:13px;color:#a855f7;"></i>
+                                        Movies &amp; Videos
+                                    </div>
+                                    <div class="subapps-grid">
+                                        <template x-for="movie in movies" :key="movie.path">
+                                            <div class="subapp-card" x-on:click="playVideo(movie)"
+                                                 style="cursor:pointer;--card-border:rgba(168,85,247,0.35);">
+                                                <div class="subapp-card-icon" style="background:rgba(168,85,247,0.12);color:#a855f7;">
+                                                    <i data-lucide="play" style="width:18px;height:18px;"></i>
+                                                </div>
+                                                <div>
+                                                    <div class="subapp-card-title" x-text="movie.title || movie.name"></div>
+                                                    <div class="subapp-card-desc" x-text="movie.ext?.toUpperCase()"></div>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                <div x-show="libLoaded && shows.length === 0 && movies.length === 0 && continueWatching.length === 0" style="text-align:center;padding:32px 0;color:var(--text-2);font-size:13px;">
+                                    No video files found on this device.
+                                </div>
+
+                            </div>
+                        </template>
+
+                    </div>
+                </template>
+
+            </div><!-- /cinema-container -->
+        </main>
+
+        <!-- ── Folder browser modal ──────────────────────────────────── -->
+        <div class="modal-overlay" x-show="showFolderBrowser" style="display:none;" x-transition x-on:click.self="showFolderBrowser = false">
+            <div class="modal-card" style="max-width:420px;width:100%;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+                    <i data-lucide="folder-open" style="width:18px;height:18px;color:#6366f1;"></i>
+                    <h4 style="margin:0;font-size:15px;font-weight:600;" x-text="browserMode === 'folder' ? 'Open folder as video queue' : 'Add video folder to playlist'"></h4>
+                    <div style="flex:1;"></div>
+                    <button class="header-icon-btn" x-on:click="showFolderBrowser = false"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+                </div>
+
+                <div style="font-size:11px;color:var(--text-2);margin-bottom:10px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" x-text="browserPath"></div>
+
+                <div style="display:flex;gap:8px;margin-bottom:10px;">
+                    <button class="toolbar-btn" style="font-size:12px;padding:5px 10px;" x-show="browserHistory.length > 0" x-on:click="browserBack()">
+                        <i data-lucide="arrow-left" style="width:13px;height:13px;"></i> Back
+                    </button>
+                </div>
+
+                <div class="folder-browser">
+                    <div x-show="browserLoading" style="text-align:center;padding:24px;color:var(--text-2);font-size:13px;">
+                        <div class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;margin-right:8px;"></div>Loading…
+                    </div>
+                    <template x-if="!browserLoading">
+                        <div>
+                            <div class="folder-browser-item" style="background:rgba(99,102,241,0.07);border-radius:8px;margin-bottom:4px;font-weight:600;color:#6366f1;"
+                                 x-on:click="selectVideoFolder({path: browserPath, name: browserPath.split('/').filter(Boolean).pop() || browserPath})">
+                                <i data-lucide="check-circle" style="width:16px;height:16px;"></i>
+                                Use this folder
+                            </div>
+                            <template x-for="item in browserItems" :key="item.path">
+                                <div class="folder-browser-item" x-on:click="browserEnter(item)">
+                                    <i data-lucide="folder" style="width:15px;height:15px;color:#f59e0b;flex-shrink:0;"></i>
+                                    <span x-text="item.name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                                    <i data-lucide="chevron-right" style="width:13px;height:13px;color:var(--text-2);margin-left:auto;flex-shrink:0;"></i>
+                                </div>
+                            </template>
+                            <div x-show="browserItems.length === 0" style="text-align:center;padding:20px;font-size:13px;color:var(--text-2);">No sub-folders here</div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── New playlist modal ──────────────────────────────────────── -->
+        <div class="modal-overlay" x-show="showNewPlaylistModal" style="display:none;" x-transition x-on:click.self="showNewPlaylistModal = false">
+            <div class="modal-card" style="max-width:360px;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                    <i data-lucide="clapperboard" style="width:18px;height:18px;color:#6366f1;"></i>
+                    <h4 style="margin:0;font-size:15px;font-weight:600;">New Video Playlist</h4>
+                </div>
+                <input
+                    type="text"
+                    placeholder="Playlist name…"
+                    x-model="newPlaylistName"
+                    x-on:keydown.enter="createEmptyPlaylist()"
+                    style="width:100%;padding:10px 12px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface-2);color:var(--text);font-size:14px;box-sizing:border-box;font-family:inherit;margin-bottom:14px;"
+                    autofocus
+                />
+                <p style="font-size:12px;color:var(--text-2);margin:0 0 16px;">
+                    After creating, use <strong>Folder → playlist</strong> to populate it with videos.
+                </p>
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="showNewPlaylistModal = false">Cancel</button>
+                    <button class="modal-btn primary" style="background:#6366f1;color:#fff;border-color:#6366f1;" x-on:click="createEmptyPlaylist()" :disabled="!newPlaylistName.trim()">Create</button>
+                </div>
+            </div>
+        </div>
+
+        {% include "partials/mini_player.html" %}
+
+        <!-- ── Video Player Overlay ──────────────────────────────────── -->
+        <div class="viewer-wrap" x-show="viewer !== null" x-transition.opacity style="display:none">
+            <div class="viewer-header">
+                <button class="viewer-close" x-on:click="closeViewer()" aria-label="Close video">
+                    <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
+                </button>
+                <span class="viewer-title" x-text="viewer?.name"></span>
+            </div>
+            <div class="viewer-body" x-data="cinemaPlayerComponent()" x-init="initPlayer(viewer?.path, viewer?.name)">
+                <!-- Resume Prompt -->
+                <div class="modal-overlay" x-show="showResumePrompt" style="display:none;" x-transition>
+                    <div class="modal-card" style="max-width:380px;">
+                        <h4 style="margin:0;font-size:16px;font-weight:600;color:var(--text);">Resume Video?</h4>
+                        <p style="font-size:13px;color:var(--text-2);margin:8px 0 16px;">
+                            You previously stopped at <strong style="color:var(--text);" x-text="`${Math.floor(savedState?.currentTime/60)}:${Math.floor(savedState?.currentTime%60).toString().padStart(2,'0')}`"></strong>
+                        </p>
+                        <div class="modal-actions">
+                            <button class="modal-btn" x-on:click="startFromBeginning()">Start Over</button>
+                            <button class="modal-btn primary" x-on:click="resumePlayback()">Resume</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;"
+                     @touchstart="handleTouchStart($event)"
+                     @touchmove="handleTouchMove($event)"
+                     @touchend="handleTouchEnd($event)">
+
+                    <video x-ref="videoEl"
+                           controls autoplay
+                           :style="`object-fit:${aspectRatio};filter:brightness(${brightness});`"
+                           x-bind:src="'/view?path=' + encodeURIComponent(viewer?.path || '')"
+                           @play="onPlay()"
+                           @pause="onPause()"
+                           @timeupdate="onTimeUpdate()"
+                           style="width:100%;height:100%;max-height:100vh;">
+                        <track kind="subtitles" :src="'/api/subtitles?path=' + encodeURIComponent(viewer?.path || '')" srclang="en" label="English" default>
+                    </video>
+
+                    <!-- Gesture ripple -->
+                    <div x-show="showRipple" class="binge-overlay" style="left:50%;top:50%;transform:translate(-50%,-50%);width:auto;text-align:center;" x-transition>
+                        <span style="font-size:24px;font-weight:700;" x-text="rippleText"></span>
+                    </div>
+
+                    <!-- Binge countdown -->
+                    <div class="binge-overlay" x-show="bingeActive" x-transition>
+                        <span style="font-size:13px;font-weight:600;">Up Next in <span x-text="bingeCountdown"></span>s</span>
+                        <div class="binge-timer-bar" :style="`width:${(bingeCountdown/5)*100}%`"></div>
+                        <div style="display:flex;gap:8px;">
+                            <button class="mini-btn" x-on:click="cancelBinge()" style="border:1px solid rgba(255,255,255,0.2);width:auto;padding:0 10px;border-radius:6px;font-size:12px;">Cancel</button>
+                            <button class="mini-btn primary" x-on:click="playNextEpisodeNow()" style="width:auto;padding:0 10px;border-radius:6px;font-size:12px;">Play Now</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
