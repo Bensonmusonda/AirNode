@@ -35,6 +35,7 @@ from airnode_auth import (
     verify_session_token,
 )
 from paths import get_resource_dir, get_data_dir
+from version import VERSION
 
 
 app = FastAPI(title="AirNode")
@@ -284,6 +285,7 @@ def login_page(request: Request):
         "next_url": _next_url(request),
         "error": "",
         "lockout_seconds": math.ceil(lockout_remaining) if lockout_remaining > 0 else 0,
+        "version": VERSION,
     })
 
 
@@ -335,7 +337,7 @@ def setup_page(request: Request):
     """
     if has_auth_config():
         return RedirectResponse(url="/login", status_code=303)
-    return _render(request, "setup.html", {"error": ""})
+    return _render(request, "setup.html", {"error": "", "version": VERSION})
 
 
 @app.post("/setup", response_class=HTMLResponse)

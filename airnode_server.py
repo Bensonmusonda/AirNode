@@ -10,6 +10,7 @@ from pathlib import Path
 
 from airnode_auth import delete_auth_config, has_auth_config
 from paths import get_resource_dir, get_data_dir, is_frozen
+from version import VERSION
 
 try:
     from zeroconf import IPVersion, ServiceInfo, Zeroconf
@@ -227,6 +228,12 @@ def do_uninstall_autostart() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run AirNode with LAN discovery, or perform maintenance tasks."
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"AirNode {VERSION}",
+        help="Show the AirNode version and exit.",
     )
     parser.add_argument("--host", default="0.0.0.0", help="Host/interface to bind.")
     parser.add_argument("--port", default=8000, type=int, help="Port to listen on.")

@@ -110,11 +110,17 @@ The setup page is restricted to **localhost** requests only, so a remote device 
 # Install build dependencies
 pip install -r requirements-dev.txt
 
-# Build the executable
+# Build the executable (uses version from version.py)
 python build.py
+
+# Build a specific version
+python build.py --version 1.1.0
+
+# Build a folder (faster startup for dev testing)
+python build.py --onedir
 ```
 
-The output is `dist/AirNode.exe` -- a single file with no external dependencies. Share it directly.
+The output is `dist/AirNode-<version>.exe` -- a single file with no external dependencies. Share it directly.
 
 **Note:** Some antivirus software may flag PyInstaller executables. This is a known false positive; the user may need to whitelist `AirNode.exe`.
 
@@ -207,8 +213,30 @@ AirNode/
 | `--reset-pin` | Delete the current PIN; next launch shows setup page |
 | `--install-autostart` | Register AirNode to start at Windows logon |
 | `--uninstall-autostart` | Remove the autostart Task Scheduler entry |
+| `--version` | Show the AirNode version and exit |
 
 ---
+
+## Versioning & Releases
+
+The version is defined in `version.py` as a single `VERSION` constant. All version references read from this one source:
+
+- **Build output filename**: `AirNode-<version>.exe` (e.g. `AirNode-1.0.0.exe`)
+- **Windows file metadata**: Right-click the exe -> Properties -> Details shows the version
+- **CLI**: `AirNode.exe --version` prints the version
+- **UI footer**: The login and setup pages show `AirNode v<version>`
+- **SHA-256 checksum**: A `.sha256` file is generated alongside each build for integrity verification
+
+### Release workflow
+
+```powershell
+# 1. Bump the version in version.py
+# 2. Tag and push
+git tag v1.0.0 && git push --tags
+# 3. Build
+python build.py --version 1.0.0
+# 4. Upload dist/AirNode-1.0.0.exe to GitHub Releases
+```
 
 ## License
 
