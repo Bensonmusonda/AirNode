@@ -70,6 +70,37 @@
             transition: background 0.1s;
         }
         .folder-browser-item:hover { background: rgba(128,128,128,0.1); }
+        .folder-browser-item.browser-selected { background: rgba(236,72,153,0.08); }
+
+        /* ── Browse-and-pick file rows ─────────────────────────── */
+        .browser-file-check {
+            width: 16px;
+            height: 16px;
+            accent-color: #ec4899;
+            flex-shrink: 0;
+            cursor: pointer;
+            margin: 0;
+        }
+        .browser-file-ext {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            color: var(--text-2);
+            background: var(--surface-2);
+            padding: 1px 6px;
+            border-radius: 4px;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+        .browser-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 12px 4px 0;
+            border-top: 1px solid var(--border);
+            margin-top: 10px;
+        }
 
         /* ── Playlist list ─────────────────────────────────────────── */
         .playlist-row {
@@ -118,7 +149,66 @@
             transition: background 0.1s;
         }
         .track-row:hover { background: rgba(128,128,128,0.08); }
-        .track-num { font-size: 12px; color: var(--text-2); width: 22px; text-align: right; flex-shrink: 0; }
+        .track-num {
+            font-size: 12px;
+            color: var(--text-2);
+            width: 22px;
+            text-align: right;
+            flex-shrink: 0;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+            align-self: center;
+        }
+
+        /* ── Track action buttons ──────────────────────────────────── */
+        .track-actions {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            opacity: 0;
+            transition: opacity 0.12s;
+            flex-shrink: 0;
+        }
+        .track-row:hover .track-actions { opacity: 1; }
+        /* Touch devices have no hover — keep actions always visible */
+        @media (hover: none) {
+            .track-actions { opacity: 1; }
+        }
+        .track-actions .row-act {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            color: var(--text-2);
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .track-actions .row-act:hover { background: rgba(128,128,128,0.12); color: var(--text); }
+        .track-actions .row-act.danger:hover { color: var(--danger, #ef4444); }
+
+        /* ── Drag-to-reorder handle ────────────────────────────────── */
+        .drag-handle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            color: var(--text-2);
+            cursor: grab;
+            touch-action: none;
+            flex-shrink: 0;
+            font-family: inherit;
+        }
+        .drag-handle:active { cursor: grabbing; }
+        .track-row.dragging { opacity: 0.55; background: rgba(128,128,128,0.12); }
+
     </style>
 </head>
 <body>
@@ -138,14 +228,36 @@
         showNewPlaylistModal: false,
         newPlaylistName: '',
 
+        /* player persistence: viewer stays alive so audio keeps playing;
+           playerOpen just hides/shows the full-screen player */
+        viewer: null,
+        playerOpen: false,
+
+        /* folder → playlist naming dialog */
+        showPlaylistNameModal: false,
+        pendingFolderData: null,
+        playlistName: '',
+        targetPlaylistId: 'new',
+
+        /* add-tracks-to-playlist state */
+        pendingPlaylistId: null,
+        /* browse-and-pick: navigate into a folder, check files to add */
+        selectedAddItems: [],
+        audioExts: ['mp3', 'flac', 'm4a', 'wav', 'ogg', 'aac', 'opus', 'weba'],
+
+        /* drag-to-reorder */
+        dragIndex: null,
+
+        /* add-single-item to playlist modal */
+        showAddItemModal: false,
+        pendingItem: null,
+
         showFolderBrowser: false,
-        browserMode: 'folder',   /* 'folder' | 'playlist' */
+        browserMode: 'folder',   /* 'folder' | 'playlist' | 'add' */
         browserPath: '/',
         browserItems: [],
         browserLoading: false,
         browserHistory: [],
-
-        viewer: null,
 
         /* ── init ──────────────────────── */
         init() {
@@ -185,18 +297,37 @@
                 ? '/api/browse'
                 : '/api/browse?path=' + encodeURIComponent(path);
             fetch(url)
-                .then(r => r.json())
+                .then(r => {
+                    /* If the session expired, the API redirects to login —
+                       send the user back there instead of showing an empty browser. */
+                    if (!r.ok) {
+                        if (r.status === 401 || r.status === 303) {
+                            window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+                            return null;
+                        }
+                        throw new Error('Browse request failed (' + r.status + ')');
+                    }
+                    return r.json();
+                })
                 .then(data => {
+                    if (!data) return;
                     if (data.roots) {
                         /* Windows root — show drive letters as folders */
                         this.browserItems = data.roots.map(r => ({ name: r, path: r, type: 'directory' }));
                     } else {
-                        this.browserItems = (data.entries || []).filter(e => e.type === 'directory');
+                        this.browserItems = (data.entries || []).filter(e => {
+                            if (e.type === 'directory') return true;
+                            if (this.browserMode !== 'select') return false;
+                            return this.audioExts.includes((e.ext || '').toLowerCase());
+                        });
                     }
                     this.browserLoading = false;
                     this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
                 })
-                .catch(() => { this.browserLoading = false; });
+                .catch(err => {
+                    this.browserLoading = false;
+                    alert('Could not load folders: ' + (err && err.message ? err.message : err));
+                });
         },
         browserEnter(item) {
             this.browserHistory.push(this.browserPath);
@@ -208,37 +339,57 @@
             }
         },
         selectFolder(item) {
-            /* 'Open as playlist' mode — load tracks instantly (single folder, no walk) */
-            if (this.browserMode === 'folder') {
-                fetch('/api/music/folder?path=' + encodeURIComponent(item.path))
-                    .then(r => r.json())
-                    .then(data => {
-                        if (!data.tracks || data.tracks.length === 0) {
-                            alert('No audio files found directly in that folder.');
-                            return;
-                        }
-                        this.showFolderBrowser = false;
+            /* 'Open folder as playlist' mode — load tracks instantly (folders picked in add mode go through /api/music/folder) */
+            fetch('/api/music/folder?path=' + encodeURIComponent(item.path))
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.tracks || data.tracks.length === 0) {
+                        alert('No audio files found in that folder.');
+                        return;
+                    }
+                    this.showFolderBrowser = false;
+
+                    if (this.browserMode === 'folder') {
+                        /* Open-as-playlist: load the folder directly */
                         this.selectedFolder = data;
-                        this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
-                    });
+                    } else if (this.browserMode === 'playlist') {
+                        /* Folder → playlist: show a naming dialog prefilled
+                           with the folder name, with option to add to an
+                           existing playlist instead */
+                        this.pendingFolderData = data;
+                        this.playlistName = data.folder || item.name;
+                        this.targetPlaylistId = 'new';
+                        this.showPlaylistNameModal = true;
+                    } else if (this.browserMode === 'add' && this.pendingPlaylistId) {
+                        /* Add-from-folder: append unique tracks to the open playlist */
+                        const pl = this.playlists.find(p => p.id === this.pendingPlaylistId);
+                        if (pl) this.addTracksToPlaylist(pl, data.tracks);
+                        this.pendingPlaylistId = null;
+                    }
+                    this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                });
+        },
+
+        /* ── Folder → playlist naming dialog ── */
+        confirmPlaylistFromFolder() {
+            if (!this.pendingFolderData) return;
+            const name = this.playlistName.trim();
+            const tracks = this.pendingFolderData.tracks || [];
+
+            if (this.targetPlaylistId === 'new') {
+                if (!name) { alert('Playlist name cannot be empty.'); return; }
+                const pl = { id: Date.now(), name, tracks: [...tracks] };
+                this.playlists.push(pl);
+                this.savePlaylists();
+                this.selectedPlaylist = pl;
             } else {
-                /* 'Add to new playlist' mode */
-                fetch('/api/music/folder?path=' + encodeURIComponent(item.path))
-                    .then(r => r.json())
-                    .then(data => {
-                        if (!data.tracks || data.tracks.length === 0) {
-                            alert('No audio files found in that folder.');
-                            return;
-                        }
-                        this.showFolderBrowser = false;
-                        const name = data.folder || item.name;
-                        const pl = { id: Date.now(), name, tracks: data.tracks };
-                        this.playlists.push(pl);
-                        this.savePlaylists();
-                        this.selectedPlaylist = pl;
-                        this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
-                    });
+                const pl = this.playlists.find(p => p.id === this.targetPlaylistId);
+                if (pl) this.addTracksToPlaylist(pl, tracks);
             }
+
+            this.showPlaylistNameModal = false;
+            this.pendingFolderData = null;
+            this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
         },
 
         /* ── playlists ─────────────────── */
@@ -260,6 +411,118 @@
             this.savePlaylists();
             if (this.selectedPlaylist && this.selectedPlaylist.id === pl.id) this.selectedPlaylist = null;
         },
+        removeTrack(pl, idx) {
+            pl.tracks.splice(idx, 1);
+            this.savePlaylists();
+        },
+        moveTrack(pl, idx, dir) {
+            const newIdx = idx + dir;
+            if (newIdx < 0 || newIdx >= pl.tracks.length) return;
+            const [item] = pl.tracks.splice(idx, 1);
+            pl.tracks.splice(newIdx, 0, item);
+            this.savePlaylists();
+        },
+        addTracksToPlaylist(pl, newTracks) {
+            const existing = new Set(pl.tracks.map(t => t.path));
+            const added = [];
+            for (const t of newTracks) {
+                if (!existing.has(t.path)) {
+                    pl.tracks.push(t);
+                    existing.add(t.path);
+                    added.push(t);
+                }
+            }
+            this.savePlaylists();
+            if (added.length === 0) {
+                alert('All of those tracks are already in this playlist.');
+            }
+        },
+        openAddTracks(pl) {
+            this.pendingPlaylistId = pl.id;
+            this.showFolderBrowser = false;
+            this.openFolderBrowser('add');
+        },
+        /* ── browse-and-pick: navigate into a folder and check files to add ── */
+        openAddItems(pl) {
+            this.pendingPlaylistId = pl.id;
+            this.selectedAddItems = [];
+            this.openFolderBrowser('select');
+        },
+        toggleBrowserItem(item) {
+            const idx = this.selectedAddItems.findIndex(i => i.path === item.path);
+            if (idx >= 0) {
+                this.selectedAddItems.splice(idx, 1);
+            } else {
+                this.selectedAddItems.push({
+                    name: item.name,
+                    title: item.name.replace(/\.[^.]+$/, ''),
+                    path: item.path,
+                    ext: item.ext
+                });
+            }
+        },
+        isBrowserSelected(path) {
+            return this.selectedAddItems.some(i => i.path === path);
+        },
+        addSelectedItems() {
+            const pl = this.playlists.find(p => p.id === this.pendingPlaylistId);
+            if (!pl || this.selectedAddItems.length === 0) return;
+            this.addTracksToPlaylist(pl, this.selectedAddItems.map(i => ({ ...i })));
+            this.selectedAddItems = [];
+            this.pendingPlaylistId = null;
+            this.showFolderBrowser = false;
+            this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+        },
+        /* ── drag-to-reorder (pointer-based, works on touch) ── */
+        startDrag(idx, e) {
+            if (this.dragIndex !== null) return;
+            this.dragIndex = idx;
+            e.preventDefault();
+            try { e.currentTarget?.setPointerCapture?.(e.pointerId); } catch (err) {}
+        },
+        onDragMove(e) {
+            if (this.dragIndex === null) return;
+            e.preventDefault();
+            const under = document.elementFromPoint(e.clientX, e.clientY);
+            const row = under && under.closest ? under.closest('.track-row') : null;
+            if (!row || row.dataset.index === undefined) return;
+            const targetIdx = parseInt(row.dataset.index, 10);
+            if (targetIdx !== this.dragIndex) {
+                const pl = this.selectedPlaylist;
+                if (!pl) return;
+                const [item] = pl.tracks.splice(this.dragIndex, 1);
+                pl.tracks.splice(targetIdx, 0, item);
+                this.dragIndex = targetIdx;
+                this.savePlaylists();
+            }
+        },
+        endDrag() {
+            this.dragIndex = null;
+        },
+
+        /* ── add single item to a playlist ── */
+        openAddItem(item) {
+            this.pendingItem = item;
+            this.playlistName = '';
+            this.targetPlaylistId = 'new';
+            this.showAddItemModal = true;
+            this.$nextTick(() => { if (window.lucide) lucide.createIcons(); });
+        },
+        confirmAddItem() {
+            if (!this.pendingItem) return;
+            if (this.targetPlaylistId === 'new') {
+                const name = this.playlistName.trim();
+                if (!name) { alert('Playlist name cannot be empty.'); return; }
+                const pl = { id: Date.now(), name, tracks: [this.pendingItem] };
+                this.playlists.push(pl);
+                this.savePlaylists();
+            } else {
+                const pl = this.playlists.find(p => p.id === this.targetPlaylistId);
+                if (pl) this.addTracksToPlaylist(pl, [this.pendingItem]);
+            }
+            this.showAddItemModal = false;
+            this.pendingItem = null;
+        },
 
         /* ── playback ──────────────────── */
         playTrackIn(tracklist, index) {
@@ -269,6 +532,7 @@
             }
             const track = tracklist[index];
             this.viewer = { name: track.title || track.name, path: track.path, kind: 'audio' };
+            this.playerOpen = true;
         },
         playFolder(folder, index) { this.playTrackIn(folder.tracks, index); },
         playPlaylist(pl, index) { this.playTrackIn(pl.tracks, index); },
@@ -279,8 +543,13 @@
             const audioExts = ['mp3', 'm4a', 'flac', 'wav', 'ogg', 'aac', 'opus'];
             const kind = audioExts.includes(ext) ? 'audio' : 'audio'; // Music Hub is always audio
             this.viewer = { name: file.name || file.title, path: file.path, kind };
+            this.playerOpen = true;
         },
-        closeViewer() { this.viewer = null; },
+
+        /* close just hides the player — audio element stays alive & keeps playing */
+        closeViewer() { this.playerOpen = false; },
+        /* reopen the full player without touching the track/position */
+        openFullPlayer() { this.playerOpen = true; },
 
         /* ── sleep timer ───────────────── */
         setSleepTimer(minutes) {
@@ -366,26 +635,47 @@
                         <button class="modal-btn" x-on:click="selectedPlaylist = null; $nextTick(()=>{if(window.lucide)lucide.createIcons();})" style="margin-bottom:16px;">
                             <i data-lucide="arrow-left" style="width:14px;height:14px;margin-right:4px;"></i>Back
                         </button>
-                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
                             <h2 x-text="selectedPlaylist.name" style="font-size:20px;font-weight:700;color:var(--text);margin:0;"></h2>
-                            <button class="toolbar-btn accent" style="font-size:12px;padding:6px 12px;" x-on:click="playPlaylist(selectedPlaylist, 0)" x-show="selectedPlaylist.tracks.length > 0">
-                                <i data-lucide="play" style="width:13px;height:13px;"></i> Play all
-                            </button>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <button class="toolbar-btn" style="font-size:12px;padding:6px 12px;" x-on:click="openAddItems(selectedPlaylist)">
+                                    <i data-lucide="list-plus" style="width:13px;height:13px;"></i> Add items
+                                </button>
+                                <button class="toolbar-btn" style="font-size:12px;padding:6px 12px;" x-on:click="openAddTracks(selectedPlaylist)">
+                                    <i data-lucide="folder-plus" style="width:13px;height:13px;"></i> Add from folder
+                                </button>
+                                <button class="toolbar-btn accent" style="font-size:12px;padding:6px 12px;" x-on:click="playPlaylist(selectedPlaylist, 0)" x-show="selectedPlaylist.tracks.length > 0">
+                                    <i data-lucide="play" style="width:13px;height:13px;"></i> Play all
+                                </button>
+                            </div>
                         </div>
                         <template x-if="selectedPlaylist.tracks.length === 0">
                             <p style="font-size:13px;color:var(--text-2);text-align:center;padding:32px 0;">
-                                No tracks yet. Use <strong>Folder → playlist</strong> to add audio files.
+                                No tracks yet. Use <strong>Add items</strong>, <strong>Add from folder</strong> or <strong>Folder → playlist</strong> to add audio files.
                             </p>
                         </template>
                         <div style="display:flex;flex-direction:column;gap:2px;">
                             <template x-for="(track, idx) in selectedPlaylist.tracks" :key="track.path">
-                                <div class="track-row" x-on:click="playPlaylist(selectedPlaylist, idx)">
+                                <div class="track-row" :data-index="idx" :class="{ 'dragging': dragIndex === idx }"
+                                     x-on:click="playPlaylist(selectedPlaylist, idx)">
+                                    <button class="drag-handle"
+                                            aria-label="Drag to reorder"
+                                            x-on:pointerdown.stop.prevent="startDrag(idx, $event)"
+                                            x-on:pointermove.stop="onDragMove($event)"
+                                            x-on:pointerup="endDrag()"
+                                            x-on:pointercancel="endDrag()">
+                                        <i data-lucide="grip-vertical" style="width:14px;height:14px;pointer-events:none;"></i>
+                                    </button>
                                     <div style="display:flex;align-items:center;gap:10px;min-width:0;">
                                         <span class="track-num" x-text="idx+1"></span>
                                         <i data-lucide="music-2" style="width:15px;height:15px;color:#ec4899;flex-shrink:0;"></i>
                                         <span style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="track.title || track.name"></span>
                                     </div>
-                                    <i data-lucide="play" style="width:14px;height:14px;opacity:0.45;flex-shrink:0;"></i>
+                                    <div class="track-actions" x-on:click.stop>
+                                        <button class="row-act danger" x-on:click="removeTrack(selectedPlaylist, idx)" title="Remove" aria-label="Remove">
+                                            <i data-lucide="x" style="width:14px;height:14px;"></i>
+                                        </button>
+                                    </div>
                                 </div>
                             </template>
                         </div>
@@ -412,7 +702,11 @@
                                         <i data-lucide="music-2" style="width:15px;height:15px;color:#ec4899;flex-shrink:0;"></i>
                                         <span style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" x-text="track.title || track.name"></span>
                                     </div>
-                                    <i data-lucide="play" style="width:14px;height:14px;opacity:0.45;flex-shrink:0;"></i>
+                                    <div class="track-actions" x-on:click.stop>
+                                        <button class="row-act" x-on:click="openAddItem(track)" title="Add to playlist" aria-label="Add to playlist">
+                                            <i data-lucide="plus" style="width:14px;height:14px;"></i>
+                                        </button>
+                                    </div>
                                 </div>
                             </template>
                         </div>
@@ -477,7 +771,7 @@
             <div class="modal-card" style="max-width:420px;width:100%;">
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
                     <i data-lucide="folder-open" style="width:18px;height:18px;color:#ec4899;"></i>
-                    <h4 style="margin:0;font-size:15px;font-weight:600;" x-text="browserMode === 'folder' ? 'Open folder as playlist' : 'Add folder to playlist'"></h4>
+                    <h4 style="margin:0;font-size:15px;font-weight:600;" x-text="browserMode === 'folder' ? 'Open folder as playlist' : (browserMode === 'add' ? 'Add tracks from folder' : (browserMode === 'select' ? 'Add items to playlist' : 'Add folder to playlist'))"></h4>
                     <div style="flex:1;"></div>
                     <button class="header-icon-btn" x-on:click="showFolderBrowser = false"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
                 </div>
@@ -497,17 +791,31 @@
                     </div>
                     <template x-if="!browserLoading">
                         <div>
-                            <!-- "Use this folder" action at top -->
+                            <!-- "Use this folder" action (all modes except select) -->
                             <div class="folder-browser-item" style="background:rgba(236,72,153,0.07);border-radius:8px;margin-bottom:4px;font-weight:600;color:#ec4899;"
+                                 x-show="browserMode !== 'select'"
                                  x-on:click="selectFolder({path: browserPath, name: browserPath.split('/').filter(Boolean).pop() || browserPath})">
                                 <i data-lucide="check-circle" style="width:16px;height:16px;"></i>
                                 Use this folder
                             </div>
-                            <template x-for="item in browserItems" :key="item.path">
+                            <!-- Navigate into sub-folders (available in every mode) -->
+                            <template x-for="item in browserItems.filter(i => i.type === 'directory')" :key="item.path">
                                 <div class="folder-browser-item" x-on:click="browserEnter(item)">
                                     <i data-lucide="folder" style="width:15px;height:15px;color:#f59e0b;flex-shrink:0;"></i>
                                     <span x-text="item.name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
                                     <i data-lucide="chevron-right" style="width:13px;height:13px;color:var(--text-2);margin-left:auto;flex-shrink:0;"></i>
+                                </div>
+                            </template>
+                            <!-- Check off individual audio files (select mode only) -->
+                            <template x-for="item in browserItems.filter(i => i.type === 'file')" :key="item.path">
+                                <div class="folder-browser-item" :class="{ 'browser-selected': isBrowserSelected(item.path) }"
+                                     x-show="browserMode === 'select'"
+                                     x-on:click="toggleBrowserItem(item)">
+                                    <input type="checkbox" class="browser-file-check" :checked="isBrowserSelected(item.path)"
+                                           x-on:click.stop="toggleBrowserItem(item)" />
+                                    <i data-lucide="music-2" style="width:15px;height:15px;color:#ec4899;flex-shrink:0;"></i>
+                                    <span x-text="item.name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                                    <span class="browser-file-ext" x-text="item.ext?.toUpperCase()"></span>
                                 </div>
                             </template>
                             <div x-show="browserItems.length === 0" style="text-align:center;padding:20px;font-size:13px;color:var(--text-2);">
@@ -515,6 +823,116 @@
                             </div>
                         </div>
                     </template>
+                </div>
+
+                <!-- Browse-and-pick action bar -->
+                <div class="browser-actions" x-show="browserMode === 'select'">
+                    <span style="font-size:12px;color:var(--text-2);" x-text="`${selectedAddItems.length} selected`"></span>
+                    <button class="modal-btn" style="background:#ec4899;color:#fff;border-color:#ec4899;"
+                            :disabled="selectedAddItems.length === 0" x-on:click="addSelectedItems()">
+                        <i data-lucide="plus" style="width:13px;height:13px;"></i> Add selected
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Folder → playlist naming dialog ───────────────────────── -->
+        <div class="modal-overlay" x-show="showPlaylistNameModal" style="display:none;" x-transition x-on:click.self="showPlaylistNameModal = false">
+            <div class="modal-card" style="max-width:400px;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                    <i data-lucide="list-music" style="width:18px;height:18px;color:#ec4899;"></i>
+                    <h4 style="margin:0;font-size:15px;font-weight:600;">Folder → Playlist</h4>
+                    <div style="flex:1;"></div>
+                    <button class="header-icon-btn" x-on:click="showPlaylistNameModal = false"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+                </div>
+
+                <p style="font-size:12px;color:var(--text-2);margin:0 0 8px;">
+                    <span x-text="pendingFolderData?.tracks?.length || 0"></span> track(s) found. Name your playlist, or add to an existing one.
+                </p>
+
+                <input
+                    type="text"
+                    placeholder="Playlist name…"
+                    x-model="playlistName"
+                    x-on:keydown.enter="confirmPlaylistFromFolder()"
+                    style="width:100%;padding:10px 12px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface-2);color:var(--text);font-size:14px;box-sizing:border-box;font-family:inherit;margin-bottom:14px;"
+                    autofocus
+                />
+
+                <div style="margin-bottom:14px;">
+                    <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;cursor:pointer;"
+                         :style="targetPlaylistId === 'new' ? 'background:rgba(236,72,153,0.08);' : ''"
+                         x-on:click="targetPlaylistId = 'new'">
+                        <input type="radio" name="pl-target" :checked="targetPlaylistId === 'new'" x-model="targetPlaylistId" value="new" style="accent-color:#ec4899;">
+                        <i data-lucide="plus" style="width:14px;height:14px;color:#ec4899;"></i>
+                        <span style="font-size:13px;font-weight:500;">Create new playlist</span>
+                    </div>
+                    <template x-for="pl in playlists" :key="pl.id">
+                        <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;cursor:pointer;"
+                             :style="targetPlaylistId === pl.id ? 'background:rgba(236,72,153,0.08);' : ''"
+                             x-on:click="targetPlaylistId = pl.id">
+                            <input type="radio" name="pl-target" :checked="targetPlaylistId === pl.id" x-model="targetPlaylistId" :value="pl.id" style="accent-color:#ec4899;">
+                            <i data-lucide="list-music" style="width:14px;height:14px;color:var(--text-2);"></i>
+                            <span style="font-size:13px;" x-text="pl.name"></span>
+                            <span style="font-size:11px;color:var(--text-2);margin-left:auto;" x-text="`${pl.tracks.length} track${pl.tracks.length===1?'':'s'}`"></span>
+                        </div>
+                    </template>
+                </div>
+
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="showPlaylistNameModal = false">Cancel</button>
+                    <button class="modal-btn" style="background:#ec4899;color:#fff;border-color:#ec4899;" x-on:click="confirmPlaylistFromFolder()">Confirm</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Add single item to playlist modal ─────────────────────── -->
+        <div class="modal-overlay" x-show="showAddItemModal" style="display:none;" x-transition x-on:click.self="showAddItemModal = false">
+            <div class="modal-card" style="max-width:400px;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                    <i data-lucide="list-plus" style="width:18px;height:18px;color:#ec4899;"></i>
+                    <h4 style="margin:0;font-size:15px;font-weight:600;">Add to Playlist</h4>
+                    <div style="flex:1;"></div>
+                    <button class="header-icon-btn" x-on:click="showAddItemModal = false"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+                </div>
+
+                <p style="font-size:12px;color:var(--text-2);margin:0 0 12px;word-break:break-all;">
+                    <strong style="color:var(--text);" x-text="pendingItem?.title || pendingItem?.name"></strong>
+                </p>
+
+                <template x-if="targetPlaylistId === 'new'">
+                    <input
+                        type="text"
+                        placeholder="New playlist name…"
+                        x-model="playlistName"
+                        x-on:keydown.enter="confirmAddItem()"
+                        style="width:100%;padding:10px 12px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface-2);color:var(--text);font-size:14px;box-sizing:border-box;font-family:inherit;margin-bottom:14px;"
+                    />
+                </template>
+
+                <div style="margin-bottom:14px;">
+                    <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;cursor:pointer;"
+                         :style="targetPlaylistId === 'new' ? 'background:rgba(236,72,153,0.08);' : ''"
+                         x-on:click="targetPlaylistId = 'new'">
+                        <input type="radio" name="additem-target" :checked="targetPlaylistId === 'new'" x-model="targetPlaylistId" value="new" style="accent-color:#ec4899;">
+                        <i data-lucide="plus" style="width:14px;height:14px;color:#ec4899;"></i>
+                        <span style="font-size:13px;font-weight:500;">New playlist</span>
+                    </div>
+                    <template x-for="pl in playlists" :key="pl.id">
+                        <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;cursor:pointer;"
+                             :style="targetPlaylistId === pl.id ? 'background:rgba(236,72,153,0.08);' : ''"
+                             x-on:click="targetPlaylistId = pl.id">
+                            <input type="radio" name="additem-target" :checked="targetPlaylistId === pl.id" x-model="targetPlaylistId" :value="pl.id" style="accent-color:#ec4899;">
+                            <i data-lucide="list-music" style="width:14px;height:14px;color:var(--text-2);"></i>
+                            <span style="font-size:13px;" x-text="pl.name"></span>
+                            <span style="font-size:11px;color:var(--text-2);margin-left:auto;" x-text="`${pl.tracks.length} track${pl.tracks.length===1?'':'s'}`"></span>
+                        </div>
+                    </template>
+                </div>
+
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="showAddItemModal = false">Cancel</button>
+                    <button class="modal-btn" style="background:#ec4899;color:#fff;border-color:#ec4899;" x-on:click="confirmAddItem()">Add</button>
                 </div>
             </div>
         </div>
@@ -535,7 +953,7 @@
                     autofocus
                 />
                 <p style="font-size:12px;color:var(--text-2);margin:0 0 16px;">
-                    After creating, use <strong>Folder → playlist</strong> to fill it with tracks.
+                    After creating, use <strong>Add from folder</strong> to fill it with tracks.
                 </p>
                 <div class="modal-actions">
                     <button class="modal-btn" x-on:click="showNewPlaylistModal = false">Cancel</button>
@@ -567,7 +985,7 @@
         {% include "partials/mini_player.html" %}
 
         <!-- ── Audio player overlay ────────────────────────────────────── -->
-        <div class="viewer-wrap" x-show="viewer !== null" x-transition.opacity style="display:none">
+        <div class="viewer-wrap" x-show="playerOpen && viewer !== null" x-transition.opacity style="display:none">
             <div class="viewer-header">
                 <button class="viewer-close" x-on:click="closeViewer()" aria-label="Close player">
                     <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>

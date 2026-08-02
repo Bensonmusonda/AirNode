@@ -1201,6 +1201,15 @@ async def save_watch_progress(request: Request):
     _save_watch_state(state)
     return state[path]
 
+@app.post("/api/media/watch-state/clear")
+def clear_watch_state():
+    """Wipes all saved watch progress (clear watch history)."""
+    try:
+        WATCH_STATE_FILE.unlink(missing_ok=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "cleared"}
+
 @app.get("/api/subtitles")
 def get_subtitles(path: str):
     """Finds matching .srt or .vtt subtitle file for video and serves WebVTT."""
@@ -1508,3 +1517,4 @@ def gallery_app(request: Request):
 def recent_app(request: Request):
     """Renders Starred & Recent sub-app."""
     return _render(request, "recent_hub.html", {"current_path": "/apps/recent", "platform": sys.platform})
+

@@ -41,13 +41,9 @@
              if (window.AirNodePlayer) window.AirNodePlayer.playNextInQueue();
          },
          openFullViewer() {
-             if (this.track && window.__airnode) {
-                 window.__airnode.openViewer({
-                     name: this.track.title,
-                     path: this.track.path,
-                     ext: (this.track.path || '').split('.').pop()
-                 });
-             }
+             // Opens the player WITHOUT resetting the track — just reveals the
+             // existing viewer (audio keeps playing at its current position).
+             window.__airnode?.openFullPlayer?.();
          }
      }"
      x-show="track !== null"
@@ -76,8 +72,8 @@
             <i data-lucide="skip-back" style="width: 15px; height: 15px;"></i>
         </button>
         <button class="mini-btn primary" x-on:click="togglePlay()" title="Play/Pause">
-            <i data-lucide="play" x-show="!isPlaying" style="width: 16px; height: 16px;"></i>
-            <i data-lucide="pause" x-show="isPlaying" style="width: 16px; height: 16px;" x-cloak></i>
+            <span x-show="!isPlaying" style="display:flex;"><i data-lucide="play" style="width: 16px; height: 16px;"></i></span>
+            <span x-show="isPlaying" style="display:flex;" x-cloak><i data-lucide="pause" style="width: 16px; height: 16px;"></i></span>
         </button>
         <button class="mini-btn" x-on:click="nextTrack()" title="Next">
             <i data-lucide="skip-forward" style="width: 15px; height: 15px;"></i>

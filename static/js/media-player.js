@@ -20,6 +20,28 @@ class AirNodeMediaManager {
 
         // Auto-bind media session actions
         this.setupMediaSession();
+        this.setupPageLifecycle();
+    }
+
+    /**
+     * Kills video playback when the page is hidden or navigated away from,
+     * so video streams are never left running in the background (audio
+     * continues playing, as intended).
+     */
+    setupPageLifecycle() {
+        const stopVideo = () => {
+            if (this.mediaType !== 'video' || !this.activeMedia) return;
+            try { this.activeMedia.pause(); } catch (e) {}
+            try { this.activeMedia.removeAttribute('src'); this.activeMedia.load(); } catch (e) {}
+            this.activeMedia = null;
+            this.isPlaying = false;
+            this.notifyListeners();
+        };
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) stopVideo();
+        });
+        window.addEventListener('pagehide', stopVideo);
+        window.addEventListener('beforeunload', stopVideo);
     }
 
     /**

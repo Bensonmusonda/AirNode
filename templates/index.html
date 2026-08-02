@@ -50,6 +50,11 @@
                 selectMode: false,
                 selectedItems: [],
 
+                /* player persistence: audio viewers stay alive when hidden so
+                   the song keeps playing; video viewers are fully destroyed
+                   on close so nothing streams in the background */
+                playerOpen: false,
+
                 uploads: [],
                 uploadDrawerOpen: false,
                 uploadDrawerMinimised: false,
@@ -457,12 +462,50 @@
                     else if (['mp3', 'ogg', 'wav', 'm4a', 'aac', 'flac'].includes(ext)) kind = 'audio';
                     else if (ext === 'pdf') kind = 'pdf';
                     this.viewer = { name: file.name, path: file.path, kind };
+                    this.playerOpen = true;
                     this.sheet = null;
                     this.contextMenu = null;
                 },
 
                 closeViewer() {
+                    const kind = this.viewer?.kind;
+                    /* Video: kill streaming entirely (pause + release src so
+                       the network stream stops). Also clear the track so the
+                       mini-player bar disappears — videos never run in background. */
+                    if (kind === 'video') {
+                        if (window.AirNodePlayer) {
+                            const p = window.AirNodePlayer;
+                            if (p.mediaType === 'video' && p.activeMedia) {
+                                try { p.activeMedia.pause(); } catch (e) {}
+                                try { p.activeMedia.removeAttribute('src'); p.activeMedia.load(); } catch (e) {}
+                            }
+                            p.activeMedia = null;
+                            p.mediaType = null;
+                            p.currentTrack = null;
+                            p.queue = [];
+                            p.queueIndex = -1;
+                            p.isPlaying = false;
+                            p.notifyListeners();
+                        }
+                        this.viewer = null;
+                        this.playerOpen = false;
+                        return;
+                    }
+                    /* Audio: keep the element alive so the song keeps playing.
+                       Just hide the full-screen player; reopen via mini bar. */
+                    if (kind === 'audio') {
+                        this.playerOpen = false;
+                        return;
+                    }
+                    /* Images / PDF / text: destroy immediately */
                     this.viewer = null;
+                    this.playerOpen = false;
+                },
+
+                /* Reopen the full-screen player without resetting the track
+                   (called by the mini-player floating bar). */
+                openFullPlayer() {
+                    this.playerOpen = true;
                 },
 
                 openContextMenu(event, file) {
@@ -807,6 +850,7 @@
     </script>
 
     <script src="/static/js/media-player.js"></script>
+    <script src="/static/js/video-player.js"></script>
     <script src="/static/js/image-viewer.js"></script>
     <script src="/static/js/audio-player.js"></script>
     <script src="/static/vendor/alpine.min.js" defer></script>
@@ -1177,7 +1221,7 @@
             </div>
         </div>
 
-        <div class="floating-controls" x-show="viewer === null">
+        <div class="floating-controls" x-show="!playerOpen">
             <input type="file" 
                 id="file-upload-input" 
                 name="file" 
@@ -1568,7 +1612,7 @@
             </div>
         </div>
 
-        <div class="viewer-wrap" x-show="viewer !== null" x-transition.opacity style="display:none">
+        <div class="viewer-wrap" x-show="playerOpen && viewer !== null" x-transition.opacity style="display:none">
             <div class="viewer-header" :class="{ 'is-hidden': viewer?.kind === 'img' && $data.isZoomed }">
                 <button class="viewer-close" x-on:click="closeViewer()" aria-label="Close viewer">
                     <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
@@ -1584,7 +1628,52 @@
                     {% include "partials/image_viewer.html" %}
                 </template>
                 <template x-if="viewer?.kind === 'video'">
-                    <video controls autoplay x-bind:src="'/view?path=' + encodeURIComponent(viewer.path)"></video>
+                    <div class="viewer-body" style="height:100%;" x-data="cinemaPlayerComponent()" x-init="initPlayer(viewer?.path, viewer?.name)">
+                        <!-- Resume Prompt -->
+                        <div class="modal-overlay" x-show="showResumePrompt" style="display:none;" x-transition>
+                            <div class="modal-card" style="max-width:380px;">
+                                <h4 style="margin:0;font-size:16px;font-weight:600;color:var(--text);">Resume Video?</h4>
+                                <p style="font-size:13px;color:var(--text-2);margin:8px 0 16px;">
+                                    You previously stopped at <strong style="color:var(--text);" x-text="`${Math.floor(savedState?.currentTime/60)}:${Math.floor(savedState?.currentTime%60).toString().padStart(2,'0')}`"></strong>
+                                </p>
+                                <div class="modal-actions">
+                                    <button class="modal-btn" x-on:click="startFromBeginning()">Start Over</button>
+                                    <button class="modal-btn primary" x-on:click="resumePlayback()">Resume</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;"
+                             @touchstart="handleTouchStart($event)"
+                             @touchmove="handleTouchMove($event)"
+                             @touchend="handleTouchEnd($event)">
+                            <video x-ref="videoEl"
+                                   controls autoplay
+                                   :style="`object-fit:${aspectRatio};filter:brightness(${brightness});`"
+                                   x-bind:src="'/view?path=' + encodeURIComponent(viewer?.path || '')"
+                                   @play="onPlay()"
+                                   @pause="onPause()"
+                                   @timeupdate="onTimeUpdate()"
+                                   style="width:100%;height:100%;max-height:100vh;">
+                                <track kind="subtitles" :src="'/api/subtitles?path=' + encodeURIComponent(viewer?.path || '')" srclang="en" label="English" default>
+                            </video>
+
+                            <!-- Gesture ripple -->
+                            <div x-show="showRipple" class="binge-overlay" style="left:50%;top:50%;transform:translate(-50%,-50%);width:auto;text-align:center;" x-transition>
+                                <span style="font-size:24px;font-weight:700;" x-text="rippleText"></span>
+                            </div>
+
+                            <!-- Binge countdown -->
+                            <div class="binge-overlay" x-show="bingeActive" x-transition>
+                                <span style="font-size:13px;font-weight:600;">Up Next in <span x-text="bingeCountdown"></span>s</span>
+                                <div class="binge-timer-bar" :style="`width:${(bingeCountdown/5)*100}%`"></div>
+                                <div style="display:flex;gap:8px;">
+                                    <button class="mini-btn" x-on:click="cancelBinge()" style="border:1px solid rgba(255,255,255,0.2);width:auto;padding:0 10px;border-radius:6px;font-size:12px;">Cancel</button>
+                                    <button class="mini-btn primary" x-on:click="playNextEpisodeNow()" style="width:auto;padding:0 10px;border-radius:6px;font-size:12px;">Play Now</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </template>
                 <template x-if="viewer?.kind === 'audio'">
                     {% include "partials/audio_player.html" %}

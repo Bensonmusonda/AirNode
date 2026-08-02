@@ -58,8 +58,8 @@
             </button>
 
             <button class="audio-play-btn" :class="{ 'is-playing': playing }" @click="togglePlay()" aria-label="Play/Pause">
-                <i data-lucide="play" x-show="!playing" style="width:22px;height:22px;"></i>
-                <i data-lucide="pause" x-show="playing" style="width:22px;height:22px;" x-cloak></i>
+                <span x-show="!playing" style="display:flex;"><i data-lucide="play" style="width:22px;height:22px;"></i></span>
+                <span x-show="playing" style="display:flex;" x-cloak><i data-lucide="pause" style="width:22px;height:22px;"></i></span>
             </button>
 
             <button class="audio-skip-btn" @click="navigate(1, true)" aria-label="Next track">
