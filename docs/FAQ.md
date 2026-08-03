@@ -91,7 +91,7 @@ resumable chunks — an interrupted upload can be continued later.
 
 ### What is the trial / license key for?
 
-AirNode is open-source (MIT). The 14-day trial is a tracking state that
+AirNode is open-source (AGPL-3.0). The 14-day trial is a tracking state that
 shows "Trial Mode" in Settings; entering a purchased license key clears it.
 All features remain available — the license is a supporter mechanism, not a
 DRM wall.

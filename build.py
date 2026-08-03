@@ -116,7 +116,7 @@ def generate_version_info(version: str) -> Path:
          StringStruct(u'FileDescription', u'AirNode - Local Network File Explorer'),
          StringStruct(u'FileVersion', u'{version}'),
          StringStruct(u'InternalName', u'AirNode'),
-         StringStruct(u'LegalCopyright', u'MIT License'),
+          StringStruct(u'LegalCopyright', u'AGPL-3.0 License'),
          StringStruct(u'OriginalFilename', u'AirNode-{version}.exe'),
          StringStruct(u'ProductName', u'AirNode'),
          StringStruct(u'ProductVersion', u'{version}')])

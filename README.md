@@ -240,4 +240,4 @@ python build.py --version 1.0.0
 
 ## License
 
-This project is licensed under the MIT License -- see the [LICENSE](LICENSE) file for details. In short: you're free to use, modify, and distribute this code, including commercially, as long as the original copyright notice is kept.
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) — see the [LICENSE](LICENSE) file for details. Any modifications or derivatives must also be released under AGPL-3.0, including when served over a network.
