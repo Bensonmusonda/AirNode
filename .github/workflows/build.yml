@@ -25,22 +25,39 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Build AirNode (onefile)
-        run: python build.py --version ${{ github.ref_name }}
+      - name: Build AirNode (onefile + onedir)
+        shell: pwsh
+        run: |
+          # build.py always wipes dist/ at the start of each run, so stage
+          # the onefile output to release-artifacts/ before building onedir.
+
+          # 1. Onefile exe (for direct download + update checks)
+          python build.py --version "${{ github.ref_name }}"
+          New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
+          Move-Item "dist\AirNode-${{ github.ref_name }}.exe" release-artifacts/
+          Move-Item "dist\AirNode-${{ github.ref_name }}.exe.sha256" release-artifacts/
+
+          # 2. Onedir folder (required by installer.iss as SourceDir)
+          python build.py --onedir --version "${{ github.ref_name }}"
 
       - name: Build Inno Setup installer
         shell: pwsh
         run: |
           # Download Inno Setup 6 and build the installer
           choco install innosetup -y --no-progress
-          $ver = "${{ github.ref_name }}" -replace '^v',''
-          ISCC.exe /DAppVersion=$ver /DSourceDir="dist\AirNode-$ver" installer.iss
+          # Source is the onedir folder dist/AirNode-<tag>/ (full ref incl. "v").
+          # Strip the leading "v" for AppVersion since Inno Setup expects a
+          # numeric version (v1.0.0 → 1.0.0) for metadata validation.
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag -replace '^v',''
+          ISCC.exe /DAppVersion=$ver /DSourceDir="dist\AirNode-$tag" installer.iss
+          # installer.iss writes OutputBaseFilename=AirNode-Setup-<ver> (no "v").
+          # Rename to include the "v" to match the release step's glob.
+          Move-Item "dist\AirNode-Setup-$ver.exe" "dist\AirNode-Setup-$tag.exe"
+          Move-Item "dist\AirNode-Setup-$tag.exe" release-artifacts/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/AirNode-${{ github.ref_name }}.exe
-            dist/AirNode-${{ github.ref_name }}.exe.sha256
-            dist/AirNode-Setup-${{ github.ref_name }}.exe
+          files: release-artifacts/*
           generate_release_notes: true
