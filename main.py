@@ -47,9 +47,34 @@ from audit import (
     log_upload,
 )
 from autostart import toggle_autostart as _toggle_autostart
+from db import (
+    add_recent_file,
+    clear_recent_files,
+    clear_watch_state,
+    get_recent_files,
+    init_db,
+    kv_delete,
+    kv_get,
+    kv_set,
+    load_watch_state,
+    save_watch_state_entry,
+)
 from logging_config import get_logger
+from media_meta import (
+    extract_cover_art,
+    read_audio_tags,
+    read_image_exif,
+)
 from paths import get_resource_dir, get_data_dir
 from version import VERSION
+from cast import discover_chromecasts, get_cast_status, play_on_chromecast
+from video_ffmpeg import (
+    FFMPEG_AVAILABLE,
+    get_video_info,
+    get_video_thumbnail,
+    start_transcode,
+    transcode_status,
+)
 
 
 logger = get_logger(__name__)
@@ -61,6 +86,10 @@ _data_dir = get_data_dir()
 
 app.mount("/static", StaticFiles(directory=str(_resource_dir / "static")), name="static")
 templates = Jinja2Templates(directory=str(_resource_dir / "templates"))
+
+# Initialise the SQLite database (Phase 6.6) — creates tables and migrates
+# any legacy JSON state files on first run.
+init_db()
 
 
 # ==============================================================================
@@ -1439,6 +1468,11 @@ def view_file(request: Request, path: str):
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found.")
 
+    # Record the file in the recent-files list (Phase 6.6) — only for
+    # full-file requests so media range probing doesn't spam the list.
+    if not request.headers.get("range"):
+        add_recent_file(str(target).replace("\\", "/"), target.name, kind="file")
+
     mime = _MIME_OVERRIDES.get(target.suffix.lower()) or mimetypes.guess_type(str(target))[0] or "application/octet-stream"
     file_size = target.stat().st_size
 
@@ -1589,60 +1623,204 @@ def service_worker():
 # Luxury Sub-Apps & Media API Endpoints
 # ==============================================================================
 
-WATCH_STATE_FILE = _data_dir / ".airnode_watch_state.json"
-
-def _load_watch_state() -> dict:
-    if WATCH_STATE_FILE.exists():
-        try:
-            with open(WATCH_STATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-def _save_watch_state(data: dict):
-    try:
-        with open(WATCH_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        logger.warning("Failed to save watch state: %s", e)
-
 @app.get("/api/media/watch-state")
 def get_watch_state():
-    """Returns saved watch progress timestamps."""
-    return _load_watch_state()
+    """Returns saved watch progress timestamps from SQLite."""
+    return load_watch_state()
 
 @app.post("/api/media/watch-state")
 async def save_watch_progress(request: Request):
-    """Updates watch timestamp for a video file."""
+    """Updates watch timestamp for a video file (SQLite-backed)."""
     body = await request.json()
     path = body.get("path")
     current_time = body.get("currentTime", 0)
     duration = body.get("duration", 0)
     if not path:
         raise HTTPException(status_code=400, detail="Missing path")
-    
-    state = _load_watch_state()
+
     pct = (current_time / duration * 100) if duration > 0 else 0
-    state[path] = {
+    completed = pct >= 92.0
+    save_watch_state_entry(path, current_time, duration, round(pct, 1), completed)
+    return {
         "currentTime": current_time,
         "duration": duration,
         "percent": round(pct, 1),
-        "completed": pct >= 92.0,
-        "updatedAt": time.time()
+        "completed": completed,
+        "updatedAt": time.time(),
     }
-    _save_watch_state(state)
-    return state[path]
 
 @app.post("/api/media/watch-state/clear")
-def clear_watch_state():
+def clear_watch_state_route():
     """Wipes all saved watch progress (clear watch history)."""
     try:
-        WATCH_STATE_FILE.unlink(missing_ok=True)
+        clear_watch_state()
     except Exception as e:
         logger.exception("Failed to clear watch state")
         raise HTTPException(status_code=500, detail="Failed to clear watch state.")
     return {"status": "cleared"}
+
+
+# === Recent Files (Phase 6.6 — SQLite-backed) ===
+
+@app.get("/api/recent")
+def api_recent_files(limit: int = 50, kind: str | None = None):
+    """Return recently opened files/folders, newest first."""
+    return {"recent": get_recent_files(limit=limit, kind=kind)}
+
+
+@app.post("/api/recent/clear")
+def api_clear_recent():
+    """Wipe the recent-files history."""
+    try:
+        clear_recent_files()
+    except Exception as e:
+        logger.exception("Failed to clear recent files")
+        raise HTTPException(status_code=500, detail="Failed to clear recent files.")
+    return {"status": "cleared"}
+
+
+# === Cover art (6.2) — embedded album art served as an image ===
+
+@app.get("/api/cover-art")
+def api_cover_art(path: str):
+    """Serve the embedded cover art for an audio file, or 404."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    cover = extract_cover_art(str(target))
+    if not cover:
+        raise HTTPException(status_code=404, detail="No cover art found.")
+
+    # Guess image MIME from magic bytes
+    if cover[:8] == b"\x89PNG\r\n\x1a\n":
+        media_type = "image/png"
+    elif cover[:3] == b"\xff\xd8\xff":
+        media_type = "image/jpeg"
+    elif cover[:6] in (b"GIF87a", b"GIF89a"):
+        media_type = "image/gif"
+    else:
+        media_type = "image/jpeg"
+    return Response(content=cover, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
+# === Photo EXIF + info (6.3) ===
+
+@app.get("/api/photo/info")
+def api_photo_info(path: str):
+    """Return EXIF metadata (camera, date, GPS, dimensions) for an image file."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    exif = read_image_exif(str(target))
+    if not exif:
+        raise HTTPException(status_code=404, detail="No metadata found for this file.")
+    return exif
+
+
+# === Video thumbnails + transcoding (6.1, 6.4) ===
+
+@app.get("/api/video/thumbnail")
+def api_video_thumbnail(path: str):
+    """Serve a thumbnail JPEG for a video file (generated via ffmpeg)."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    thumb = get_video_thumbnail(str(target))
+    if not thumb or not thumb.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail unavailable (ffmpeg not installed?).")
+    return FileResponse(
+        path=thumb,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get("/api/video/info")
+def api_video_info(path: str):
+    """Return duration + resolution for a video (via ffprobe)."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+    info = get_video_info(str(target))
+    if not info:
+        info = {"error": "ffprobe unavailable or no metadata."}
+    return info
+
+
+@app.post("/api/video/transcode")
+def api_video_transcode(path: str = Form(...)):
+    """Start background transcoding of a non-compatible video to MP4."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+    return start_transcode(str(target))
+
+
+@app.get("/api/video/transcode/status")
+def api_video_transcode_status(path: str):
+    """Check whether an MP4 version exists (or is in progress)."""
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+    return transcode_status(str(target))
+
+
+# === Cast to TV (6.5) — Chromecast discovery + playback ===
+
+@app.get("/api/cast/devices")
+def api_cast_devices():
+    """Discover available Chromecast devices on the network."""
+    try:
+        devices = discover_chromecasts(timeout=3.0)
+    except Exception:
+        devices = []
+    return {"devices": devices, "chromecast_available": get_cast_status().get("chromecast_available", False)}
+
+
+@app.post("/api/cast/play")
+async def api_cast_play(request: Request):
+    """Cast a video path to a Chromecast device.
+
+    Body: {device_id, path, title?}
+    """
+    body = await request.json()
+    device_id = body.get("device_id", "")
+    path = body.get("path", "")
+    title = body.get("title", "") or Path(path).name
+
+    target = resolve_target(path)
+    if target is None or not is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found.")
+    if not device_id:
+        raise HTTPException(status_code=400, detail="device_id is required.")
+
+    # Build a device-reachable view URL. Prefer the primary LAN URL if we
+    # know it, otherwise fall back to the Host header.
+    primary = os.environ.get("AIRNODE_PRIMARY_URL", "")
+    view_path = f"/view?path={quote(path, safe='')}"
+    media_url = f"{primary.rstrip('/')}{view_path}" if primary else view_path
+
+    result = play_on_chromecast(device_id, media_url, title=title)
+    if result.get("status") == "unavailable" or result.get("status") == "error":
+        return JSONResponse(status_code=400, content=result)
+    return result
 
 @app.get("/api/subtitles")
 def get_subtitles(path: str):
@@ -1859,6 +2037,10 @@ def scan_music_library(path: str = "", bust: int = 0):
                     for f in sorted(audio_files):
                         full_path = str(dir_path / f).replace("\\", "/")
                         t_item = {"name": f, "title": Path(f).stem, "path": full_path, "ext": Path(f).suffix.lstrip(".")}
+                        # ID3/audio tags (6.2) — artist, album, track, duration
+                        t_item.update(read_audio_tags(full_path))
+                        if t_item.get("title"):
+                            t_item["title"] = t_item["title"]
                         track_items.append(t_item)
                         all_tracks.append(t_item)
                     folders_map[folder_name] = {"folder": folder_name, "path": folder_path_str, "tracks": track_items}
@@ -1887,12 +2069,16 @@ def music_folder_tracks(path: str):
             for f in sorted(filenames, key=lambda x: x.lower()):
                 if Path(f).suffix.lower() in audio_exts:
                     full_p = Path(dirpath) / f
-                    tracks.append({
+                    full_path = str(full_p).replace("\\", "/")
+                    t_item = {
                         "name": f,
                         "title": Path(f).stem,
-                        "path": str(full_p).replace("\\", "/"),
+                        "path": full_path,
                         "ext": Path(f).suffix.lstrip(".")
-                    })
+                    }
+                    # ID3/audio tags (6.2)
+                    t_item.update(read_audio_tags(full_path))
+                    tracks.append(t_item)
     except OSError as exc:
         logger.exception("Failed to scan music folder %s", target)
         raise HTTPException(status_code=500, detail="Failed to scan music folder.")

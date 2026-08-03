@@ -26,6 +26,7 @@ block_cipher = None
 hiddenimports = (
     collect_submodules("uvicorn")
     + collect_submodules("zeroconf")
+    + collect_submodules("mutagen")
     + [
         # FastAPI / Starlette dynamic deps
         "multipart",
@@ -37,17 +38,24 @@ hiddenimports = (
         # System tray
         "pystray",
         "PIL",
+        # Optional: Chromecast casting (gracefully degrades if missing)
+        "pychromecast",
+        "pychromecast.controllers",
         # Our own modules
         "main",
         "airnode_auth",
         "airnode_config",
         "audit",
         "autostart",
+        "cast",
+        "db",
         "logging_config",
+        "media_meta",
         "paths",
         "tray",
         "updater",
         "license",
+        "video_ffmpeg",
         "version",
     ]
 )

@@ -601,6 +601,56 @@
                 p.notifyListeners();
             }
             this.viewer = null;
+        },
+
+        /* ── Cast to TV (6.5) ─────────────────────────── */
+        casting: false,
+        castDevices: [],
+        showCastPicker: false,
+        async discoverCastDevices() {
+            this.casting = true;
+            try {
+                const r = await fetch('/api/cast/devices');
+                const data = await r.json();
+                this.castDevices = data.devices || [];
+                this.showCastPicker = this.castDevices.length > 0;
+                if (this.castDevices.length === 0) {
+                    alert('No Chromecast devices found on your network.');
+                }
+            } catch (err) {
+                alert('Could not discover Chromecast devices.');
+            }
+            this.casting = false;
+        },
+        async castToDevice(deviceId, deviceName) {
+            if (!this.viewer) return;
+            this.showCastPicker = false;
+            this.casting = true;
+            try {
+                const body = JSON.stringify({
+                    device_id: deviceId,
+                    path: this.viewer.path,
+                    title: this.viewer.name || ''
+                });
+                const r = await fetch('/api/cast/play', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': document.cookie.split('; ')
+                            .find(c => c.startsWith('airnode_csrf='))?.split('=')[1] || ''
+                    },
+                    body
+                });
+                const data = await r.json();
+                if (data.status === 'error' || data.status === 'unavailable') {
+                    alert(data.message || 'Cast failed.');
+                    return;
+                }
+                alert(data.message || `Casting to ${deviceName}...`);
+            } catch (err) {
+                alert('Cast failed.');
+            }
+            this.casting = false;
         }
     }">
         <!-- ── Header ──────────────────────────────────────────────── -->
@@ -885,13 +935,22 @@
                                     <div class="lib-section-label">
                                         <i data-lucide="film" style="width:13px;height:13px;color:#a855f7;"></i>
                                         Movies & Videos
+                                        <span class="cache-badge" x-show="fromCache">
+                                            <i data-lucide="database" style="width:10px;height:10px;"></i> cached
+                                        </span>
                                     </div>
                                     <div class="subapps-grid">
                                         <template x-for="movie in movies" :key="movie.path">
                                             <div class="subapp-card" x-on:click="playVideo(movie)"
                                                  style="cursor:pointer;--card-border:rgba(168,85,247,0.35);">
-                                                <div class="subapp-card-icon" style="background:rgba(168,85,247,0.12);color:#a855f7;">
-                                                    <i data-lucide="play" style="width:18px;height:18px;"></i>
+                                                <div class="subapp-card-icon" style="background:rgba(168,85,247,0.12);color:#a855f7;position:relative;overflow:hidden;width:100%;height:64px;border-radius:10px;">
+                                                    <!-- Video thumbnail (6.4) — loaded lazily, falls back to play icon on error -->
+                                                    <img :src="'/api/video/thumbnail?path=' + encodeURIComponent(movie.path)"
+                                                         alt=""
+                                                         loading="lazy"
+                                                         style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0;"
+                                                         @error="$el.style.display='none'">
+                                                    <i data-lucide="play" style="width:18px;height:18px;position:relative;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));"></i>
                                                 </div>
                                                 <div>
                                                     <div class="subapp-card-title" x-text="movie.title || movie.name"></div>
@@ -1119,6 +1178,37 @@
                     <i data-lucide="arrow-left" style="width:18px;height:18px;"></i>
                 </button>
                 <span class="viewer-title" x-text="viewer?.name"></span>
+                <div style="flex:1;"></div>
+                <!-- Cast to TV button (6.5) -->
+                <button class="toolbar-btn" style="font-size:12px;padding:6px 10px;flex-shrink:0;" x-on:click="discoverCastDevices()" :disabled="casting">
+                    <i data-lucide="cast" style="width:14px;height:14px;color:#6366f1;"></i>
+                    <span x-text="casting ? 'Scanning…' : 'Cast'"></span>
+                </button>
+            </div>
+
+            <!-- Cast device picker modal (6.5) -->
+            <div class="modal-overlay" x-show="showCastPicker" style="display:none;" x-transition x-on:click.self="showCastPicker = false">
+                <div class="modal-card" style="max-width:380px;">
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+                        <i data-lucide="cast" style="width:18px;height:18px;color:#6366f1;"></i>
+                        <h4 style="margin:0;font-size:15px;font-weight:600;">Cast to Device</h4>
+                        <div style="flex:1;"></div>
+                        <button class="header-icon-btn" x-on:click="showCastPicker = false"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+                    </div>
+                    <template x-if="castDevices.length === 0">
+                        <p style="font-size:13px;color:var(--text-2);text-align:center;padding:20px 0;">
+                            No Chromecast devices found.
+                        </p>
+                    </template>
+                    <div class="folder-browser">
+                        <template x-for="dev in castDevices" :key="dev.id">
+                            <div class="folder-browser-item" x-on:click="castToDevice(dev.id, dev.name)">
+                                <i data-lucide="tv" style="width:15px;height:15px;color:#6366f1;flex-shrink:0;"></i>
+                                <span x-text="dev.name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
             </div>
             <div class="viewer-body" x-data="cinemaPlayerComponent()" x-init="initPlayer(viewer?.path, viewer?.name)">
                 <!-- Resume Prompt -->
