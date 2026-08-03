@@ -605,6 +605,58 @@ def settings_restart():
     return JSONResponse({"message": "Restarting AirNode..."})
 
 
+# ==============================================================================
+# Update Check & Licensing Endpoints (Phase 4)
+# ==============================================================================
+
+@app.get("/api/update/check")
+def api_update_check(force: int = 0):
+    """Check GitHub Releases for a newer AirNode version.
+
+    Cached for 6 hours. Pass ?force=1 for an explicit check.
+    """
+    from updater import check_for_update
+    info = check_for_update(force=bool(force))
+    return JSONResponse({
+        "available": info.available,
+        "latest_version": info.latest_version,
+        "current_version": info.current_version,
+        "url": info.url,
+        "notes": info.notes,
+        "published_at": info.published_at,
+        "error": info.error,
+    })
+
+
+@app.get("/api/license/status")
+def api_license_status():
+    """Return the current license / trial status."""
+    from license import get_license_status
+    return JSONResponse(get_license_status())
+
+
+@app.post("/api/license/activate")
+async def api_license_activate(request: Request):
+    """Activate a product key (ABNODE-XXXXX-XXXXX-XXXXX-XXXXX)."""
+    from license import activate_key
+    body = await request.json()
+    key = str(body.get("key", "")).strip()
+    if not key:
+        return JSONResponse(status_code=400, content={"error": "License key is required."})
+    ok, message, status = activate_key(key)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": message, "status": status})
+    return JSONResponse({"message": message, "status": status})
+
+
+@app.post("/api/license/revoke")
+def api_license_revoke():
+    """Remove the activated license and return to trial mode."""
+    from license import revoke_license
+    status = revoke_license()
+    return JSONResponse({"message": "License removed.", "status": status})
+
+
 # === HTMX Directory Browsing ===
 
 @app.get("/browse", response_class=HTMLResponse)

@@ -1,0 +1,46 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Build AirNode (onefile)
+        run: python build.py --version ${{ github.ref_name }}
+
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          # Download Inno Setup 6 and build the installer
+          choco install innosetup -y --no-progress
+          $ver = "${{ github.ref_name }}" -replace '^v',''
+          ISCC.exe /DAppVersion=$ver /DSourceDir="dist\AirNode-$ver" installer.iss
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/AirNode-${{ github.ref_name }}.exe
+            dist/AirNode-${{ github.ref_name }}.exe.sha256
+            dist/AirNode-Setup-${{ github.ref_name }}.exe
+          generate_release_notes: true

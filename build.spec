@@ -46,6 +46,8 @@ hiddenimports = (
         "logging_config",
         "paths",
         "tray",
+        "updater",
+        "license",
         "version",
     ]
 )

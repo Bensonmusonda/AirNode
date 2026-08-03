@@ -123,6 +123,87 @@
                 autostartBusy: false,
                 restarting: false,
 
+                // License state
+                licenseStatus: null,
+                licenseKey: '',
+                licenseBusy: false,
+                licenseMsg: { show: false, text: '', ok: false },
+
+                // Update check state
+                updateStatus: null,
+                updateBusy: false,
+                updateMsg: { show: false, text: '', ok: false },
+
+                async init() {
+                    this.refreshLicense();
+                    this.refreshUpdate();
+                },
+
+                async refreshLicense() {
+                    try {
+                        const res = await fetch('/api/license/status');
+                        if (res.ok) this.licenseStatus = await res.json();
+                    } catch (e) {
+                        console.error('[AirNode License Status Error]', e);
+                    }
+                },
+
+                async activateLicense() {
+                    this.licenseBusy = true;
+                    this.licenseMsg.show = false;
+                    try {
+                        const res = await fetch('/api/license/activate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
+                            body: JSON.stringify({ key: this.licenseKey })
+                        });
+                        const data = await res.json();
+                        if (!res.ok || data.error) {
+                            this.licenseMsg = { show: true, text: data.error || 'Activation failed.', ok: false };
+                        } else {
+                            this.licenseMsg = { show: true, text: data.message, ok: true };
+                            this.licenseStatus = data.status;
+                            this.licenseKey = '';
+                        }
+                    } catch (e) {
+                        this.licenseMsg = { show: true, text: 'Activation failed (network error).', ok: false };
+                    } finally {
+                        this.licenseBusy = false;
+                    }
+                },
+
+                async revokeLicense() {
+                    this.licenseBusy = true;
+                    try {
+                        const res = await fetch('/api/license/revoke', {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': getCsrfToken() }
+                        });
+                        const data = await res.json();
+                        this.licenseStatus = data.status;
+                        this.licenseMsg = { show: true, text: data.message, ok: true };
+                    } catch (e) {
+                        this.licenseMsg = { show: true, text: 'Failed to remove license.', ok: false };
+                    } finally {
+                        this.licenseBusy = false;
+                    }
+                },
+
+                async refreshUpdate(force = false) {
+                    if (this.updateBusy && !force) return;
+                    this.updateBusy = true;
+                    this.updateMsg.show = false;
+                    try {
+                        const res = await fetch('/api/update/check' + (force ? '?force=1' : ''));
+                        if (res.ok) this.updateStatus = await res.json();
+                    } catch (e) {
+                        console.error('[AirNode Update Check Error]', e);
+                        this.updateMsg = { show: true, text: 'Could not check for updates.', ok: false };
+                    } finally {
+                        this.updateBusy = false;
+                    }
+                },
+
                 get portInput() {
                     return this.$refs.portInput;
                 },
@@ -324,6 +405,111 @@
                                 <span x-text="restarting ? 'Restarting...' : 'Restart'"></span>
                             </button>
                         </div>
+                    </div>
+                </div>
+
+                <!-- License -->
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;">
+                        License
+                    </div>
+
+                    <div class="settings-card">
+                        <template x-if="licenseStatus?.status === 'active'">
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                                <div class="settings-row">
+                                    <div>
+                                        <div class="settings-title" style="color: #16a34a;">Licensed ✓</div>
+                                        <div class="settings-desc" x-text="licenseStatus?.license_key"></div>
+                                    </div>
+                                    <button class="btn-danger" style="flex-shrink: 0;" x-bind:disabled="licenseBusy"
+                                        x-on:click="revokeLicense()">Remove</button>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="licenseStatus?.status !== 'active'">
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                                <div class="settings-row">
+                                    <div>
+                                        <div class="settings-title">
+                                            <span x-text="licenseStatus?.status === 'expired' ? 'Trial Expired' : 'Trial Mode'"></span>
+                                        </div>
+                                        <div class="settings-desc">
+                                            <template x-if="licenseStatus?.status === 'trial'">
+                                                <span><span x-text="licenseStatus?.days_remaining"></span> days remaining</span>
+                                            </template>
+                                            <template x-if="licenseStatus?.status === 'expired'">
+                                                <span>Enter a license key to continue using AirNode</span>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </div>
+                                <input type="text" x-model="licenseKey" placeholder="ABNODE-XXXXX-XXXXX-XXXXX-XXXXX"
+                                    style="width:100%; box-sizing:border-box; padding:8px 10px; background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:13px; outline:none;"
+                                    x-bind:disabled="licenseBusy"
+                                    x-on:keydown.enter="activateLicense()" />
+                                <button class="btn-primary" x-bind:disabled="licenseBusy || !licenseKey.trim()"
+                                    x-on:click="activateLicense()">
+                                    <span x-text="licenseBusy ? 'Activating...' : 'Activate License'"></span>
+                                </button>
+                                <div class="settings-msg"
+                                    :class="{ 'show': licenseMsg.show, 'ok': licenseMsg.ok, 'err': !licenseMsg.ok }"
+                                    x-text="licenseMsg.text"></div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Updates -->
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;">
+                        Updates
+                    </div>
+
+                    <div class="settings-card">
+                        <template x-if="updateStatus !== null">
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                                <template x-if="updateStatus?.available">
+                                    <div class="settings-row">
+                                        <div>
+                                            <div class="settings-title" style="color: #f59e0b;">Update available ✨</div>
+                                            <div class="settings-desc">
+                                                v<span x-text="updateStatus?.current_version"></span> → v<span x-text="updateStatus?.latest_version"></span>
+                                            </div>
+                                        </div>
+                                        <a class="btn-primary" style="text-decoration: none; text-align: center; flex-shrink: 0;"
+                                            x-bind:href="updateStatus?.url" target="_blank" rel="noopener">Download</a>
+                                    </div>
+                                </template>
+                                <template x-if="!updateStatus?.available && !updateStatus?.error">
+                                    <div class="settings-row">
+                                        <div>
+                                            <div class="settings-title">You're up to date</div>
+                                            <div class="settings-desc">v<span x-text="updateStatus?.current_version"></span> is the latest version</div>
+                                        </div>
+                                    </div>
+                                </template>
+                                <template x-if="updateStatus?.error">
+                                    <div class="settings-row">
+                                        <div>
+                                            <div class="settings-title" style="color: var(--danger);">Update check failed</div>
+                                            <div class="settings-desc" x-text="updateStatus?.error"></div>
+                                        </div>
+                                    </div>
+                                </template>
+                                <button class="btn-primary" x-bind:disabled="updateBusy" x-on:click="refreshUpdate(true)">
+                                    <span x-text="updateBusy ? 'Checking...' : 'Check for Updates'"></span>
+                                </button>
+                            </div>
+                        </template>
+                        <template x-if="updateStatus === null">
+                            <div class="settings-row">
+                                <div>
+                                    <div class="settings-title">Checking for updates…</div>
+                                </div>
+                            </div>
+                        </template>
                     </div>
                 </div>
 

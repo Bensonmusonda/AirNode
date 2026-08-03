@@ -306,6 +306,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Remove the AirNode autostart entry from Task Scheduler.",
     )
+    parser.add_argument(
+        "--generate-key",
+        action="store_true",
+        help="Generate a new license key and exit.",
+    )
+    parser.add_argument(
+        "--reset-trial",
+        action="store_true",
+        help="Reset the license trial timer and exit (developer tool).",
+    )
     return parser.parse_args()
 
 
@@ -352,6 +362,15 @@ def main() -> None:
         do_install_autostart()
     if args.uninstall_autostart:
         do_uninstall_autostart()
+    if args.generate_key:
+        from license import generate_key
+        print(generate_key())
+        sys.exit(0)
+    if args.reset_trial:
+        from license import reset_trial
+        reset_trial()
+        print("Trial timer reset.")
+        sys.exit(0)
 
     # ── Startup validation (Phase 3.4) ──────────────────────────────
     # Check writable data dir first — a cryptic traceback on a read-only
