@@ -38,6 +38,7 @@ from airnode_auth import (
     verify_pin,
     verify_session_token,
 )
+from airnode_config import load_config, save_config
 from audit import (
     log_batch_delete,
     log_delete,
@@ -45,6 +46,7 @@ from audit import (
     log_rename,
     log_upload,
 )
+from autostart import toggle_autostart as _toggle_autostart
 from logging_config import get_logger
 from paths import get_resource_dir, get_data_dir
 from version import VERSION
@@ -518,6 +520,89 @@ def connect(request: Request):
         "qr_path": os.environ.get("AIRNODE_QR_PATH", ""),
         "qr_error": os.environ.get("AIRNODE_QR_ERROR", ""),
     })
+
+
+# ==============================================================================
+# Settings Page & Endpoints
+# ==============================================================================
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+    """Renders the system settings page."""
+    cfg = load_config()
+    return _render(request, "settings.html", {
+        "config": cfg,
+        "version": VERSION,
+    })
+
+
+@app.post("/settings/port")
+async def settings_port(request: Request):
+    """Change the server port. Requires restart to take effect."""
+    body = await request.json()
+    try:
+        port = int(body.get("port", 0))
+    except (ValueError, TypeError):
+        return JSONResponse(status_code=400, content={"error": "Invalid port."})
+
+    if port < 1 or port > 65535:
+        return JSONResponse(status_code=400, content={"error": "Port must be between 1 and 65535."})
+
+    cfg = load_config()
+    cfg.port = port
+    save_config(cfg)
+    logger.info("Port changed to %s (restart required)", port)
+    return JSONResponse({"message": f"Port set to {port}. Restart AirNode to apply."})
+
+
+@app.post("/settings/mdns/toggle")
+def settings_mdns_toggle():
+    """Toggle mDNS advertisement. Requires restart to take effect."""
+    cfg = load_config()
+    cfg.mdns_enabled = not cfg.mdns_enabled
+    save_config(cfg)
+    state = "enabled" if cfg.mdns_enabled else "disabled"
+    logger.info("mDNS %s (restart required)", state)
+    return JSONResponse({"message": f"mDNS {state}. Restart AirNode to apply."})
+
+
+@app.post("/settings/autostart/toggle")
+def settings_autostart_toggle():
+    """Toggle Windows autostart via the HKCU Run registry key."""
+    new_state, message = _toggle_autostart()
+    logger.info("Autostart toggle: %s", message)
+    if new_state:
+        logger.info("Autostart enabled")
+        return JSONResponse({"message": "Autostart enabled. AirNode will start at logon."})
+    else:
+        # Check whether message indicates success (disabled) or failure
+        if "disabled" in message.lower():
+            return JSONResponse({"message": "Autostart disabled."})
+        logger.error("Failed to toggle autostart: %s", message)
+        return JSONResponse(status_code=500, content={"error": message})
+
+
+@app.post("/settings/restart")
+def settings_restart():
+    """Restart the AirNode process."""
+    import subprocess
+    logger.info("Restart requested — respawning process...")
+    # Spawn a new instance of ourselves and exit
+    exe = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+    args = [exe] + [a for a in sys.argv[1:] if a != "--no-browser"]
+    try:
+        subprocess.Popen(args, cwd=str(Path(exe).resolve().parent), close_fds=True)
+    except Exception as e:
+        logger.exception("Restart failed")
+        return JSONResponse(status_code=500, content={"error": f"Restart failed: {e}"})
+    # Give the response a moment, then exit
+    import threading
+    def _delayed_exit():
+        import time
+        time.sleep(0.5)
+        os._exit(0)
+    threading.Thread(target=_delayed_exit, daemon=True).start()
+    return JSONResponse({"message": "Restarting AirNode..."})
 
 
 # === HTMX Directory Browsing ===

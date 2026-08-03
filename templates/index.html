@@ -1475,6 +1475,13 @@
 
                 <div class="dropdown-divider"></div>
 
+                <button class="dropdown-item" x-on:click="settingsOpen = null; window.location.href = '/settings';">
+                    <span class="dropdown-icon"><i data-lucide="settings" style="width:14px;height:14px;"></i></span>
+                    <span>Settings</span>
+                </button>
+
+                <div class="dropdown-divider"></div>
+
                 <button class="dropdown-item" x-on:click="settingsOpen = null">
                     <span class="dropdown-icon"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i></span>
                     <span>Refresh Index</span>

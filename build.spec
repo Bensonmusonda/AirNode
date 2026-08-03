@@ -34,12 +34,18 @@ hiddenimports = (
         # QR code image factory
         "qrcode",
         "qrcode.image.svg",
+        # System tray
+        "pystray",
+        "PIL",
         # Our own modules
         "main",
         "airnode_auth",
+        "airnode_config",
         "audit",
+        "autostart",
         "logging_config",
         "paths",
+        "tray",
         "version",
     ]
 )
@@ -100,7 +106,7 @@ if onefile:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
-        icon=None,  # Add an .ico path here if you have one
+        icon=str(Path(SPECPATH).resolve() / "assets" / "airnode-icon.ico"),
         version=version_file if version_file else None,
     )
 else:
@@ -125,7 +131,7 @@ else:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
-        icon=None,
+        icon=str(Path(SPECPATH).resolve() / "assets" / "airnode-icon.ico"),
         version=version_file if version_file else None,
     )
     coll = COLLECT(

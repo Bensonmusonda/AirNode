@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AirNode Settings</title>
+    <meta name="description" content="AirNode system settings." />
+    <link rel="stylesheet" href="/static/css/app.css" />
+    <link rel="stylesheet" href="/static/vendor/inter-font.css" />
+    <script src="/static/vendor/htmx.min.js" defer></script>
+    <script src="/static/vendor/lucide.min.js" defer></script>
+    <script src="/static/vendor/alpine.min.js" defer></script>
+    <style>
+        /* iOS-style toggle switch */
+        .toggle {
+            position: relative;
+            width: 52px;
+            height: 30px;
+            border-radius: 15px;
+            background: #cbd5e1;
+            border: none;
+            cursor: pointer;
+            transition: background 0.25s ease;
+            flex-shrink: 0;
+            padding: 0;
+        }
+        .toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            transition: transform 0.25s ease;
+        }
+        .toggle.toggle-on {
+            background: #3b82f6;
+        }
+        .toggle.toggle-on::after {
+            transform: translateX(22px);
+        }
+        .toggle:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .settings-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+        }
+        .settings-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+        }
+        .settings-desc {
+            font-size: 12px;
+            color: var(--text-2);
+            margin-top: 2px;
+        }
+        .settings-card {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px;
+        }
+        .settings-msg {
+            font-size: 12px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            margin-top: 10px;
+            display: none;
+        }
+        .settings-msg.show { display: block; }
+        .settings-msg.ok { background: #f0fdf4; color: #16a34a; }
+        .settings-msg.err { background: #fef2f2; color: #dc2626; }
+
+        .btn-primary {
+            background: var(--accent, #3b82f6);
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .btn-primary:hover { opacity: 0.85; }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .btn-danger {
+            background: #dc2626;
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .btn-danger:hover { opacity: 0.85; }
+    </style>
+    <script>
+        function getCsrfToken() {
+            const match = document.cookie.match(/(?:^|; )airnode_csrf=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        }
+
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('settings', () => ({
+                port: {{ config.port }},
+                mdns: {{ 'true' if config.mdns_enabled else 'false' }},
+                autostart: {{ 'true' if config.autostart else 'false' }},
+                mdnsBusy: false,
+                autostartBusy: false,
+                restarting: false,
+
+                get portInput() {
+                    return this.$refs.portInput;
+                },
+
+                async savePort() {
+                    const msg = this.$refs.portMsg;
+                    const val = parseInt(this.port);
+                    if (isNaN(val) || val < 1 || val > 65535) {
+                        msg.className = 'settings-msg show err';
+                        msg.textContent = 'Port must be between 1 and 65535.';
+                        return;
+                    }
+                    try {
+                        const res = await fetch('/settings/port', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
+                            body: JSON.stringify({ port: this.port })
+                        });
+                        const data = await res.json();
+                        if (data.error) {
+                            msg.className = 'settings-msg show err';
+                            msg.textContent = data.error;
+                        } else {
+                            msg.className = 'settings-msg show ok';
+                            msg.textContent = data.message;
+                        }
+                    } catch (e) {
+                        msg.className = 'settings-msg show err';
+                        msg.textContent = 'Failed to save port.';
+                    }
+                },
+
+                async toggleMdns() {
+                    if (this.mdnsBusy) return;
+                    this.mdnsBusy = true;
+                    const msg = this.$refs.mdnsMsg;
+                    try {
+                        const res = await fetch('/settings/mdns/toggle', {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': getCsrfToken() }
+                        });
+                        const data = await res.json();
+                        if (data.error) {
+                            msg.className = 'settings-msg show err';
+                            msg.textContent = data.error;
+                        } else {
+                            this.mdns = !this.mdns;
+                            msg.className = 'settings-msg show ok';
+                            msg.textContent = data.message;
+                        }
+                    } catch (e) {
+                        msg.className = 'settings-msg show err';
+                        msg.textContent = 'Failed to toggle mDNS.';
+                    } finally {
+                        this.mdnsBusy = false;
+                    }
+                },
+
+                async toggleAutostart() {
+                    if (this.autostartBusy) return;
+                    this.autostartBusy = true;
+                    const msg = this.$refs.autostartMsg;
+                    try {
+                        const res = await fetch('/settings/autostart/toggle', {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': getCsrfToken() }
+                        });
+                        const data = await res.json();
+                        if (data.error) {
+                            msg.className = 'settings-msg show err';
+                            msg.textContent = data.error;
+                        } else {
+                            this.autostart = !this.autostart;
+                            msg.className = 'settings-msg show ok';
+                            msg.textContent = data.message;
+                        }
+                    } catch (e) {
+                        msg.className = 'settings-msg show err';
+                        msg.textContent = 'Failed to toggle autostart.';
+                    } finally {
+                        this.autostartBusy = false;
+                    }
+                },
+
+                async restart() {
+                    if (this.restarting) return;
+                    this.restarting = true;
+                    try {
+                        await fetch('/settings/restart', {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': getCsrfToken() }
+                        });
+                        // Give server time to respond before page dies
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 2000);
+                    } catch (e) {
+                        this.restarting = false;
+                        alert('Restart failed. Please close and reopen AirNode.');
+                    }
+                }
+            }));
+        });
+    </script>
+</head>
+
+<body class="auth-body" x-data="settings">
+    <main class="settings-page">
+        <section class="auth-panel" style="max-width: 640px; width: 100%; margin: 0 auto;">
+            <div class="auth-header">
+                <span class="auth-wordmark">AirNode</span>
+                <h1>Settings</h1>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 24px; padding: 8px 0;">
+
+                <!-- Connection -->
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;">
+                        Connection
+                    </div>
+
+                    <!-- Port -->
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">Port</div>
+                                <div class="settings-desc">Port the web server listens on</div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                                <input x-ref="portInput" type="number" min="1" max="65535" x-model="port"
+                                    style="width: 80px; padding: 7px 8px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 13px; text-align: center;" />
+                                <button class="btn-primary" x-on:click="savePort()">Apply</button>
+                            </div>
+                        </div>
+                        <div x-ref="portMsg" class="settings-msg"></div>
+                    </div>
+
+                    <!-- mDNS Toggle -->
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">Local network name (mDNS)</div>
+                                <div class="settings-desc">Advertise as airnode.local</div>
+                            </div>
+                            <button role="switch" class="toggle" :class="mdns ? 'toggle-on' : ''"
+                                :aria-checked="mdns.toString()" x-bind:disabled="mdnsBusy"
+                                x-on:click="toggleMdns()"></button>
+                        </div>
+                        <div x-ref="mdnsMsg" class="settings-msg"></div>
+                    </div>
+
+                    <!-- Autostart Toggle -->
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">Start with Windows</div>
+                                <div class="settings-desc">Launch AirNode automatically when you log in</div>
+                            </div>
+                            <button role="switch" class="toggle" :class="autostart ? 'toggle-on' : ''"
+                                :aria-checked="autostart.toString()" x-bind:disabled="autostartBusy"
+                                x-on:click="toggleAutostart()"></button>
+                        </div>
+                        <div x-ref="autostartMsg" class="settings-msg"></div>
+                    </div>
+                </div>
+
+                <!-- Access -->
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;">
+                        Access
+                    </div>
+
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">Connection QR code</div>
+                                <div class="settings-desc">Scan to connect from your phone</div>
+                            </div>
+                            <a href="/connect" class="btn-primary" style="text-decoration: none; text-align: center; flex-shrink: 0;">Open QR</a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- System -->
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;">
+                        System
+                    </div>
+
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">Restart AirNode</div>
+                                <div class="settings-desc">Restart the app to apply port or mDNS changes</div>
+                            </div>
+                            <button class="btn-danger" style="flex-shrink: 0;" x-bind:disabled="restarting"
+                                x-on:click="restart()">
+                                <span x-text="restarting ? 'Restarting...' : 'Restart'"></span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- About -->
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;">
+                        About
+                    </div>
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">AirNode</div>
+                                <div class="settings-desc">Local network file explorer & media server</div>
+                            </div>
+                            <div style="font-size: 13px; color: var(--text-2); flex-shrink: 0;">v{{ version }}</div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <p style="font-size: 12px; color: var(--text-2); text-align: center; margin-top: 16px;">
+                <a href="/" style="color: var(--accent, #3b82f6); text-decoration: none;">← Back to file explorer</a>
+            </p>
+        </section>
+    </main>
+</body>
+
+</html>

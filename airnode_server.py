@@ -9,8 +9,10 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 
 from airnode_auth import delete_auth_config, has_auth_config
+from airnode_config import load_config
 from logging_config import get_logger, setup_logging
 from paths import get_resource_dir, get_data_dir, is_frozen
+from tray import start_tray_thread
 from version import VERSION
 
 
@@ -268,6 +270,16 @@ def parse_args() -> argparse.Namespace:
         help="Disable mDNS/Bonjour advertisement.",
     )
     parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not automatically open the browser on startup.",
+    )
+    parser.add_argument(
+        "--no-tray",
+        action="store_true",
+        help="Do not show the system tray icon.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug-level logging.",
@@ -303,36 +315,55 @@ def main() -> None:
     if args.uninstall_autostart:
         do_uninstall_autostart()
 
+    # Load config file and merge with CLI args.
+    # CLI args take precedence when explicitly provided.
+    cfg = load_config()
+
+    # Determine effective port/host/mdns:
+    # - If CLI args are at defaults, use config values if present
+    # - Otherwise CLI args win
+    port = args.port if args.port != 8000 else cfg.port
+    host = args.host if args.host != "0.0.0.0" else cfg.host
+    mdns_enabled = not args.no_mdns and cfg.mdns_enabled
+
     # Check port availability before starting — give a clear error instead
     # of letting uvicorn crash with a cryptic traceback.
-    if not is_port_available(args.port, args.host):
-        alt_port = find_available_port(args.port, args.host)
-        if alt_port != args.port:
-            print(f"Port {args.port} is already in use.")
+    if not is_port_available(port, host):
+        alt_port = find_available_port(port, host)
+        if alt_port != port:
+            print(f"Port {port} is already in use.")
             print(f"AirNode will use port {alt_port} instead.")
             print(f"Open: http://localhost:{alt_port}")
-            args.port = alt_port
+            port = alt_port
         else:
-            print(f"ERROR: Port {args.port} is already in use and no free port was found.")
+            print(f"ERROR: Port {port} is already in use and no free port was found.")
             print("Close the application using that port, or specify a different port:")
             print(f"  AirNode.exe --port <port>")
             sys.exit(1)
 
-    # Auto-open browser on first run (no PIN set yet)
-    first_run = not has_auth_config()
-    if first_run:
-        webbrowser.open(f"http://localhost:{args.port}/setup")
+    # Start the system tray icon (background thread) unless disabled
+    if not args.no_tray:
+        tray_thread = start_tray_thread()
+        if tray_thread:
+            logger.info("System tray icon enabled")
+
+    # Auto-open browser unless --no-browser is passed.
+    # On first run, go to /setup; otherwise go to the main page.
+    if not args.no_browser:
+        first_run = not has_auth_config()
+        target = "/setup" if first_run else "/"
+        webbrowser.open(f"http://localhost:{port}{target}")
 
     import uvicorn
 
-    with MdnsAdvertisement(port=args.port, enabled=not args.no_mdns) as advertisement:
+    with MdnsAdvertisement(port=port, enabled=mdns_enabled) as advertisement:
         publish_connection_details(advertisement)
         print_access_urls(advertisement)
 
         # Disable reload when frozen (PyInstaller) — reload spawns a new
         # process and doesn't work inside a frozen executable.
         reload = not is_frozen()
-        uvicorn.run("main:app", host=args.host, port=args.port, reload=reload)
+        uvicorn.run("main:app", host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

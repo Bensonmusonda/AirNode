@@ -51,10 +51,24 @@ def check_dependencies() -> None:
                 pkg = pkg.split('[')[0]
             # Normalize package name (e.g. python-multipart -> python_multipart)
             module_name = pkg.replace('-', '_')
+            # Known package-name -> import-module mappings
+            import_aliases = {
+                "Pillow": "PIL",
+                "python-dotenv": "dotenv",
+                "python-multipart": "multipart",
+            }
             try:
                 __import__(module_name)
             except ImportError:
-                # Some packages import under a different name (e.g. python-dotenv -> dotenv)
+                # Try known aliases first
+                alias = import_aliases.get(pkg)
+                if alias:
+                    try:
+                        __import__(alias)
+                        continue
+                    except ImportError:
+                        pass
+                # Fallback: try last part of hyphenated name
                 alias = pkg.split('-')[-1] if '-' in pkg else None
                 if alias and alias != module_name:
                     try:
@@ -136,6 +150,11 @@ def main() -> None:
         "--onedir",
         action="store_true",
         help="Build a folder instead of a single file (faster startup for dev testing).",
+    )
+    parser.add_argument(
+        "--no-icon",
+        action="store_true",
+        help="Build without the app icon.",
     )
     args = parser.parse_args()
 
