@@ -6,7 +6,7 @@ This wraps PyInstaller so you don't have to remember the spec file name.
 Usage:
     python build.py                     # single-file dist/AirNode-<version>.exe
     python build.py --onedir            # folder build (faster startup, dev testing)
-    python build.py --version 1.1.0     # override the version from version.py
+    python build.py --version v1.1.0    # override the version (leading "v" allowed)
 
 Prerequisites:
     pip install -r requirements-dev.txt
@@ -30,6 +30,22 @@ DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 SPEC_FILE = PROJECT_ROOT / "build.spec"
 REQUIREMENTS_FILE = PROJECT_ROOT / "requirements.txt"
+
+# Version prefixes to strip before building (e.g. "v1.0.0" -> "1.0.0")
+_VERSION_PREFIXES = ("v", "V")
+
+
+def normalize_version(version: str) -> str:
+    """Strip a leading 'v'/'V' so tags like v1.0.0 build as 1.0.0.
+
+    This mirrors updater._normalize_version so release assets produced by
+    CI (which tags with "v1.0.0") get clean numeric filenames like
+    AirNode-1.0.0.exe and AirNode-Setup-1.0.0.exe.
+    """
+    for prefix in _VERSION_PREFIXES:
+        if version.startswith(prefix):
+            return version[1:]
+    return version
 
 
 def check_dependencies() -> None:
@@ -144,7 +160,7 @@ def main() -> None:
     parser.add_argument(
         "--version",
         default=VERSION,
-        help=f"Version to build (default: {VERSION} from version.py)",
+        help=f"Version to build (default: {VERSION} from version.py). A leading 'v' is allowed.",
     )
     parser.add_argument(
         "--onedir",
@@ -158,7 +174,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    version = args.version
+    # Normalize so CI can pass "v1.0.0" (from the git tag) and build.py
+    # still produces clean numeric filenames like AirNode-1.0.0.exe.
+    version = normalize_version(args.version)
 
     # Check that PyInstaller is installed
     try:
