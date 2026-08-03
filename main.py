@@ -777,6 +777,39 @@ def cleanup_expired_upload_sessions(ttl_hours: int = 24):
     except Exception as e:
         logger.warning("Upload session cleanup iteration failed: %s", e)
 
+def cleanup_upload_temp() -> None:
+    """Remove all incomplete upload session directories.
+
+    Called during graceful shutdown so temp files don't accumulate
+    across restarts. Completed uploads are already moved to their
+    final destination by /upload/finalize.
+    """
+    if not UPLOAD_TEMP_DIR.exists():
+        return
+    try:
+        for session_dir in UPLOAD_TEMP_DIR.iterdir():
+            if session_dir.is_dir():
+                try:
+                    shutil.rmtree(session_dir)
+                except Exception as e:
+                    logger.warning("Failed to remove upload temp %s: %s", session_dir.name, e)
+    except Exception as e:
+        logger.warning("Upload temp cleanup failed: %s", e)
+
+
+def shutdown_cleanup() -> None:
+    """Best-effort cleanup of in-memory and on-disk temp state on shutdown.
+
+    - Watch state is already disk-persisted on every write, so nothing
+      needs flushing here.
+    - Upload temp sessions are purged so they don't linger across
+      restarts.
+    """
+    logger.info("Shutting down — cleaning up temp files...")
+    cleanup_upload_temp()
+    logger.info("Cleanup complete.")
+
+
 def sanitize_file_id(file_id: str) -> str:
     """Sanitizes file_id for safe use as a directory name."""
     clean = "".join(c for c in file_id if c.isalnum() or c in ("-", "_")).strip()
@@ -963,6 +996,14 @@ async def upload_finalize(
             content={"collision": True, "filename": safe_filename}
         )
 
+    # Clean up any orphaned partial assembly files from a previous failed
+    # finalize attempt so they don't accumulate on retry.
+    for stale in target_dir.glob(f".{safe_filename}.tmp_*"):
+        try:
+            stale.unlink()
+        except Exception:
+            pass
+
     temp_dest = target_dir / f".{safe_filename}.tmp_{int(time.time())}"
     try:
         async with aiofiles.open(temp_dest, "wb") as out_file:
@@ -980,15 +1021,24 @@ async def upload_finalize(
         temp_dest.rename(destination)
 
     except Exception as e:
+        # Clean up the partial temp file, but LEAVE the session intact
+        # so the client can retry finalize without re-uploading chunks.
         if temp_dest.exists():
-            temp_dest.unlink()
+            try:
+                temp_dest.unlink()
+            except Exception:
+                pass
         logger.exception("Upload assembly failed for %s", safe_filename)
-        raise HTTPException(status_code=500, detail="Upload assembly failed.")
-    finally:
-        try:
-            shutil.rmtree(session_dir)
-        except Exception:
-            pass
+        raise HTTPException(
+            status_code=500,
+            detail="Upload assembly failed. The session has been preserved — you can retry finalize.",
+        )
+
+    # Success — now safe to clean up the chunk session.
+    try:
+        shutil.rmtree(session_dir)
+    except Exception:
+        pass
 
     return JSONResponse(
         status_code=200,

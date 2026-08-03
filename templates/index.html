@@ -218,11 +218,21 @@
                         finalizeFormData.append('file_id', item.id);
                         finalizeFormData.append('force_overwrite', item.forceOverwrite ? 'true' : 'false');
 
-                        const finalizeResp = await fetch('/upload/finalize', {
+                        // Finalize may fail transiently mid-assembly. The server now
+                        // preserves the session on failure, so retry once before giving up.
+                        let finalizeResp = await fetch('/upload/finalize', {
                             method: 'POST',
                             headers: { 'X-CSRF-Token': getCsrfToken() },
                             body: finalizeFormData
                         });
+
+                        if (!finalizeResp.ok) {
+                            finalizeResp = await fetch('/upload/finalize', {
+                                method: 'POST',
+                                headers: { 'X-CSRF-Token': getCsrfToken() },
+                                body: finalizeFormData
+                            });
+                        }
 
                         if (!finalizeResp.ok) {
                             const errData = await finalizeResp.json().catch(() => ({ detail: 'Assembly failed' }));
@@ -354,7 +364,9 @@
                     fetch(`/upload/cancel/${item.id}`, {
                         method: 'DELETE',
                         headers: { 'X-CSRF-Token': getCsrfToken() }
-                    }).catch(() => {});
+                    }).catch(err => {
+                        console.error('[AirNode Cancel Upload Error]', err);
+                    });
                     this.uploads = this.uploads.filter(u => u.id !== item.id);
                     this.processUploadQueue();
                 },
@@ -631,11 +643,23 @@
 
                 openProperties(file) {
                     fetch(`/properties?path=${encodeURIComponent(file.path)}`)
-                        .then(r => r.json())
+                        .then(async r => {
+                            if (!r.ok) {
+                                const msg = await r.text().catch(() => 'Failed to load properties');
+                                throw new Error(msg || `Failed to load properties (${r.status})`);
+                            }
+                            return r.json();
+                        })
                         .then(data => {
                             this.propertiesData = data;
                             this.contextMenu = null;
                             this.sheet = null;
+                        })
+                        .catch(err => {
+                            console.error('[AirNode Properties Error]', err);
+                            window.dispatchEvent(new CustomEvent('show-toast', {
+                                detail: { message: err.message || 'Failed to load properties', type: 'error' }
+                            }));
                         });
                 },
 
@@ -681,6 +705,10 @@
                                 const msg = await r.text();
                                 window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Failed to delete items', type: 'error' } }));
                             }
+                        })
+                        .catch(err => {
+                            console.error('[AirNode Batch Delete Error]', err);
+                            window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Failed to delete items (network error)', type: 'error' } }));
                         });
                 },
 
@@ -725,6 +753,11 @@
                                 window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Rename failed', type: 'error' } }));
                             }
                             this.renameModal = null;
+                        })
+                        .catch(err => {
+                            console.error('[AirNode Rename Error]', err);
+                            this.renameModal = null;
+                            window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Rename failed (network error)', type: 'error' } }));
                         });
                 },
 
@@ -755,6 +788,11 @@
                                 window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Failed to create folder', type: 'error' } }));
                             }
                             this.newFolderModal = false;
+                        })
+                        .catch(err => {
+                            console.error('[AirNode New Folder Error]', err);
+                            this.newFolderModal = false;
+                            window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Failed to create folder (network error)', type: 'error' } }));
                         });
                 },
 

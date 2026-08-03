@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -99,8 +100,14 @@ class MdnsAdvertisement(AbstractContextManager):
 
     def __exit__(self, exc_type, exc_value, traceback):
         if self.zeroconf and self.info:
-            self.zeroconf.unregister_service(self.info)
-            self.zeroconf.close()
+            try:
+                self.zeroconf.unregister_service(self.info)
+            except Exception as exc:
+                logger.warning("mDNS unregister failed: %s", exc)
+            try:
+                self.zeroconf.close()
+            except Exception as exc:
+                logger.warning("mDNS close failed: %s", exc)
         return False
 
     @property
@@ -302,6 +309,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _validate_data_dir() -> None:
+    """Verify the data directory is writable before starting the server.
+
+    Exits with a clear message instead of letting the app crash later with
+    a cryptic traceback when it tries to write config/logs/cache files.
+    """
+    data_dir = get_data_dir()
+    if not data_dir.exists():
+        print(f"ERROR: Data directory does not exist: {data_dir}")
+        print("Create this folder and make sure AirNode can write to it, then try again.")
+        sys.exit(1)
+
+    probe = data_dir / f".airnode_write_test_{os.getpid()}"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"ERROR: The AirNode data directory is not writable: {data_dir}")
+        print(f"  Reason: {exc}")
+        print("Fix the folder permissions and try again.")
+        sys.exit(1)
+
+
+def _validate_port(port: int) -> None:
+    """Validate that a port value is in the valid 1-65535 range."""
+    if not isinstance(port, int) or port < 1 or port > 65535:
+        print(f"ERROR: Invalid port number: {port!r}")
+        print("Port must be an integer between 1 and 65535.")
+        sys.exit(1)
+
+
 def main() -> None:
     args = parse_args()
     setup_logging(verbose=args.verbose)
@@ -315,6 +353,11 @@ def main() -> None:
     if args.uninstall_autostart:
         do_uninstall_autostart()
 
+    # ── Startup validation (Phase 3.4) ──────────────────────────────
+    # Check writable data dir first — a cryptic traceback on a read-only
+    # install folder is one of the worst first-run experiences.
+    _validate_data_dir()
+
     # Load config file and merge with CLI args.
     # CLI args take precedence when explicitly provided.
     cfg = load_config()
@@ -325,6 +368,9 @@ def main() -> None:
     port = args.port if args.port != 8000 else cfg.port
     host = args.host if args.host != "0.0.0.0" else cfg.host
     mdns_enabled = not args.no_mdns and cfg.mdns_enabled
+
+    # Validate the effective port is a legal value before binding.
+    _validate_port(port)
 
     # Check port availability before starting — give a clear error instead
     # of letting uvicorn crash with a cryptic traceback.
@@ -341,7 +387,11 @@ def main() -> None:
             print(f"  AirNode.exe --port <port>")
             sys.exit(1)
 
+    # Store the resolved port so the tray / settings page can read it back
+    os.environ.setdefault("AIRNODE_ACTUAL_PORT", str(port))
+
     # Start the system tray icon (background thread) unless disabled
+    tray_thread = None
     if not args.no_tray:
         tray_thread = start_tray_thread()
         if tray_thread:
@@ -356,14 +406,57 @@ def main() -> None:
 
     import uvicorn
 
-    with MdnsAdvertisement(port=port, enabled=mdns_enabled) as advertisement:
-        publish_connection_details(advertisement)
-        print_access_urls(advertisement)
+    # ── Graceful shutdown (Phase 3.1) ───────────────────────────────
+    # Register a SIGTERM handler so `taskkill` / service managers can shut
+    # us down cleanly (Ctrl+C is handled by KeyboardInterrupt in the
+    # try/except/finally below).
+    def _handle_sigterm(signum, frame):
+        logger.info("Received SIGTERM — shutting down gracefully...")
+        raise KeyboardInterrupt
 
-        # Disable reload when frozen (PyInstaller) — reload spawns a new
-        # process and doesn't work inside a frozen executable.
-        reload = not is_frozen()
-        uvicorn.run("main:app", host=host, port=port, reload=reload)
+    if hasattr(signal, "SIGTERM"):
+        try:
+            signal.signal(signal.SIGTERM, _handle_sigterm)
+        except ValueError:
+            # Not in main thread — skip; uvicorn will handle the shutdown.
+            pass
+
+    try:
+        with MdnsAdvertisement(port=port, enabled=mdns_enabled) as advertisement:
+            publish_connection_details(advertisement)
+            print_access_urls(advertisement)
+
+            # Disable reload when frozen (PyInstaller) — reload spawns a new
+            # process and doesn't work inside a frozen executable.
+            reload = not is_frozen()
+            uvicorn.run("main:app", host=host, port=port, reload=reload)
+    except KeyboardInterrupt:
+        # Ctrl+C / SIGTERM — normal graceful shutdown path
+        logger.info("Shutdown signal received")
+    except Exception:
+        logger.exception("AirNode terminated unexpectedly")
+    finally:
+        # mDNS is unregistered by the MdnsAdvertisement context manager's
+        # __exit__ as the with-block unwinds.
+        # Stop the tray icon explicitly so the system tray icon disappears
+        # immediately rather than lingering until the process dies.
+        if tray_thread is not None:
+            try:
+                # pystray stores the icon object on the thread it runs on
+                # (see tray.run_tray: threading.current_thread().airnode_icon = icon)
+                icon = getattr(tray_thread, "airnode_icon", None)
+                if icon is not None:
+                    icon.stop()
+            except Exception as exc:
+                logger.warning("Tray cleanup failed: %s", exc)
+
+        # Clean up remaining in-memory / temp state (upload sessions, etc.)
+        try:
+            from main import shutdown_cleanup
+            shutdown_cleanup()
+        except Exception as exc:
+            logger.warning("Shutdown cleanup failed: %s", exc)
+        logger.info("AirNode stopped")
 
 
 if __name__ == "__main__":
