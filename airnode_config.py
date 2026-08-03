@@ -23,6 +23,7 @@ DEFAULTS = {
     "host": "0.0.0.0",
     "mdns_enabled": True,
     "autostart": False,
+    "last_visited": "/",
 }
 
 
@@ -33,6 +34,7 @@ class AirNodeConfig:
     host: str = DEFAULTS["host"]
     mdns_enabled: bool = DEFAULTS["mdns_enabled"]
     autostart: bool = DEFAULTS["autostart"]
+    last_visited: str = DEFAULTS["last_visited"]
 
     def to_dict(self) -> dict:
         return {
@@ -40,6 +42,7 @@ class AirNodeConfig:
             "host": self.host,
             "mdns_enabled": self.mdns_enabled,
             "autostart": self.autostart,
+            "last_visited": self.last_visited,
         }
 
     @classmethod
@@ -49,6 +52,7 @@ class AirNodeConfig:
             host=str(data.get("host", DEFAULTS["host"])),
             mdns_enabled=bool(data.get("mdns_enabled", DEFAULTS["mdns_enabled"])),
             autostart=bool(data.get("autostart", DEFAULTS["autostart"])),
+            last_visited=str(data.get("last_visited", DEFAULTS["last_visited"])),
         )
 
 

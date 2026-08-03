@@ -64,6 +64,15 @@ templates = Jinja2Templates(directory=str(_resource_dir / "templates"))
 
 
 # ==============================================================================
+# Gzip Compression Middleware (5.6)
+# ==============================================================================
+
+from starlette.middleware.gzip import GZipMiddleware
+
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
+
+
+# ==============================================================================
 # Centralized Exception Handling
 # ==============================================================================
 
@@ -343,6 +352,47 @@ def scan_directory(target: Path) -> list[dict]:
         })
     return entries
 
+
+# ==============================================================================
+# Directory Scan Cache (5.5) — fast repeated browsing of the same folder
+# ==============================================================================
+
+_SCAN_CACHE: dict[str, tuple[float, float, list[dict]]] = {}
+_SCAN_CACHE_TTL = 8.0  # seconds
+
+
+def _scan_directory_cached(target: Path) -> list[dict]:
+    """Return scan results with a short TTL cache so HTMX paging/back
+    navigation doesn't re-stat the whole directory on every request."""
+    key = str(target.resolve())
+    try:
+        mtime = target.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    now = time.time()
+
+    cached = _SCAN_CACHE.get(key)
+    if cached and (now - cached[0]) < _SCAN_CACHE_TTL and cached[1] == mtime:
+        return cached[2]
+
+    entries = scan_directory(target)
+    _SCAN_CACHE[key] = (now, mtime, entries)
+    if len(_SCAN_CACHE) > 256:
+        for k in [k for k, v in _SCAN_CACHE.items() if (now - v[0]) > _SCAN_CACHE_TTL]:
+            _SCAN_CACHE.pop(k, None)
+    return entries
+
+
+def invalidate_scan_cache(target: Path | None = None) -> None:
+    """Drop the cache entry for `target` (or the whole cache when None)."""
+    if target is None:
+        _SCAN_CACHE.clear()
+    else:
+        try:
+            _SCAN_CACHE.pop(str(target.resolve()), None)
+        except Exception:
+            pass
+
 def _render(request: Request, template: str, context: dict, status_code: int = 200):
     """Utility helper to render templates with consistent request contexts."""
     return templates.TemplateResponse(request=request, name=template, context=context, status_code=status_code)
@@ -482,7 +532,14 @@ def reset_pin_route():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """Renders the main layout and root drive/directory listing."""
+    """Renders the main layout and root drive/directory listing.
+    On page load (non-HTMX), redirect to the last-visited folder (5.3)."""
+    cfg = load_config()
+    if cfg.last_visited and cfg.last_visited not in ("/", ""):
+        target = resolve_target(cfg.last_visited)
+        if target and target.exists() and target.is_dir():
+            return RedirectResponse(url=f"/browse?path={quote(cfg.last_visited, safe='')}", status_code=302)
+
     if sys.platform == "win32":
         entries = [
             {"name": str(r), "type": "directory", "size_display": "", "path": str(r).replace("\\", "/"), "ext": "", "viewable": False, "mtime": 0.0}
@@ -682,9 +739,17 @@ async def browse(request: Request, path: str = ""):
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"Not a directory: {path!r}")
 
-    entries = await run_in_threadpool(scan_directory, target)
+    # Use the short-TTL scan cache (5.5) and persist last-visited (5.3)
+    entries = await run_in_threadpool(_scan_directory_cached, target)
     current_path = str(target).replace("\\", "/")
     breadcrumbs = build_breadcrumbs(current_path)
+
+    if not is_htmx:
+        cfg = load_config()
+        if cfg.last_visited != current_path:
+            cfg.last_visited = current_path
+            save_config(cfg)
+
     ctx = {"entries": entries, "current_path": current_path, "breadcrumbs": breadcrumbs, "platform": sys.platform}
 
     return _render(request, "partials/file_list.html" if is_htmx else "index.html", ctx)
@@ -1433,8 +1498,91 @@ async def browse_json(path: str = ""):
         raise HTTPException(status_code=403, detail="Access denied.")
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=404, detail="Not found.")
-    entries = await run_in_threadpool(scan_directory, target)
+    entries = await run_in_threadpool(_scan_directory_cached, target)
     return {"current_path": str(target).replace("\\", "/"), "entries": entries}
+
+
+# ==============================================================================
+# Recursive Search & PWA (5.1, 5.2)
+# ==============================================================================
+
+@app.get("/api/search")
+async def search_files(q: str = "", path: str = "", limit: int = 100):
+    """Recursively search filenames under `path` (or all roots) for `q`.
+    Case-insensitive substring match, capped at `limit` results."""
+    q = q.strip().lower()
+    if not q:
+        return JSONResponse({"results": [], "query": q})
+    limit = max(1, min(limit, 500))
+    start = resolve_target(path) if path else None
+    roots = [start] if start else ROOTS
+    results = []
+    for root in roots:
+        if not root or not root.exists():
+            continue
+        try:
+            for dirpath, _, filenames in os.walk(root):
+                for f in filenames:
+                    if len(results) >= limit:
+                        break
+                    if q in f.lower():
+                        full = Path(dirpath) / f
+                        try:
+                            st = full.stat()
+                            size, mtime = st.st_size, st.st_mtime
+                        except OSError:
+                            size, mtime = None, 0.0
+                        results.append({
+                            "name": f,
+                            "path": str(full).replace("\\", "/"),
+                            "type": "file",
+                            "size_bytes": size,
+                            "size_display": format_size(size),
+                            "mtime": mtime,
+                        })
+                if len(results) >= limit:
+                    break
+        except Exception as e:
+            logger.warning("Search error in %s: %s", root, e)
+    return JSONResponse({"results": results, "query": q, "count": len(results)})
+
+
+# --- PWA (5.1) ---
+
+@app.get("/manifest.json")
+def pwa_manifest():
+    """Web App Manifest — phones can 'Add to Home Screen' as a standalone app."""
+    return JSONResponse({
+        "name": "AirNode",
+        "short_name": "AirNode",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#0f1114",
+        "theme_color": "#3b82f6",
+        "icons": [
+            {"src": "/static/airnode-icon.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/static/airnode-icon.png", "sizes": "512x512", "type": "image/png"},
+        ],
+    })
+
+
+@app.get("/sw.js")
+def service_worker():
+    """Minimal service worker: network-first with offline shell fallback."""
+    return Response(
+        "const C='airnode-v1';"
+        "self.addEventListener('install',e=>{"
+        "e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/manifest.json'])));self.skipWaiting();});"
+        "self.addEventListener('activate',e=>{"
+        "e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x!==C).map(x=>caches.delete(x)))));"
+        "self.clients.claim();});"
+        "self.addEventListener('fetch',e=>{"
+        "if(e.request.method!=='GET')return;"
+        "e.respondWith(fetch(e.request).then(r=>{const c=r.clone();caches.open(C).then(ca=>ca.put(e.request,c));return r;})"
+        ".catch(()=>caches.match(e.request).then(m=>m||caches.match('/'))));});",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 # ==============================================================================
