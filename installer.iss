@@ -62,6 +62,8 @@ Type: filesandordirs; Name: "{app}\static\generated"
 
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
   if CurUninstallStep = usUninstall then
     Exec('schtasks.exe', '/Delete /TN "AirNode" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
