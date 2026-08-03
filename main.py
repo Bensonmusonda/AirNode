@@ -19,24 +19,38 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi import UploadFile, Form, File
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exception_handlers import http_exception_handler
 import time
 
 from airnode_auth import (
     COOKIE_NAME,
+    CSRF_COOKIE_NAME,
     SESSION_MAX_AGE_SECONDS,
     check_login_lockout,
+    create_csrf_token,
     create_pin,
     create_session_token,
     has_auth_config,
     register_login_failure,
     register_login_success,
     reset_pin,
+    verify_csrf_token,
     verify_pin,
     verify_session_token,
 )
+from audit import (
+    log_batch_delete,
+    log_delete,
+    log_new_folder,
+    log_rename,
+    log_upload,
+)
+from logging_config import get_logger
 from paths import get_resource_dir, get_data_dir
 from version import VERSION
 
+
+logger = get_logger(__name__)
 
 app = FastAPI(title="AirNode")
 
@@ -45,6 +59,48 @@ _data_dir = get_data_dir()
 
 app.mount("/static", StaticFiles(directory=str(_resource_dir / "static")), name="static")
 templates = Jinja2Templates(directory=str(_resource_dir / "templates"))
+
+
+# ==============================================================================
+# Centralized Exception Handling
+# ==============================================================================
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    """Log HTTP exceptions (4xx/5xx) and return a clean JSON response.
+    Avoids leaking internal filesystem paths or stack traces to clients."""
+    if exc.status_code >= 500:
+        logger.error(
+            "HTTP %s on %s %s: %s",
+            exc.status_code,
+            request.method,
+            request.url.path,
+            exc.detail,
+        )
+    else:
+        logger.info(
+            "HTTP %s on %s %s: %s",
+            exc.status_code,
+            request.method,
+            request.url.path,
+            exc.detail,
+        )
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all for unhandled exceptions. Logs the full traceback to disk
+    and returns a generic 500 response — never leaks internal details."""
+    logger.exception(
+        "Unhandled exception on %s %s",
+        request.method,
+        request.url.path,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal error occurred. Check the AirNode log for details."},
+    )
 
 
 PUBLIC_PATHS = {"/login", "/setup", "/favicon.ico"}
@@ -120,6 +176,24 @@ async def require_authentication(request: Request, call_next):
         return await call_next(request)
 
     if verify_session_token(request.cookies.get(COOKIE_NAME)):
+        # CSRF check for state-changing requests (double-submit cookie pattern).
+        # The CSRF token is set as a cookie on login and must be echoed back
+        # via the X-CSRF-Token header (or _csrf form field) on POST/PUT/DELETE.
+        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
+            submitted_token = request.headers.get("X-CSRF-Token")
+            if not submitted_token:
+                # Also accept a form field for plain HTML form submissions
+                try:
+                    form = await request.form()
+                    submitted_token = form.get("_csrf")
+                except Exception:
+                    submitted_token = None
+            if not verify_csrf_token(cookie_token, submitted_token):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "CSRF validation failed."},
+                )
         return await call_next(request)
 
     if request.headers.get("HX-Request"):
@@ -324,6 +398,13 @@ def login_submit(
         httponly=True,
         samesite="lax",
     )
+    response.set_cookie(
+        CSRF_COOKIE_NAME,
+        create_csrf_token(),
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=False,  # JS needs to read it to send back as a header
+        samesite="lax",
+    )
     return response
 
 
@@ -365,8 +446,10 @@ def setup_submit(
 
     if not pin:
         return _render(request, "setup.html", {"error": "PIN cannot be empty."})
-    if len(pin) < 4:
-        return _render(request, "setup.html", {"error": "PIN must be at least 4 digits."})
+    if len(pin) < 6:
+        return _render(request, "setup.html", {"error": "PIN must be at least 6 digits."})
+    if len(pin) > 10:
+        return _render(request, "setup.html", {"error": "PIN must be at most 10 digits."})
     if not pin.isdigit():
         return _render(request, "setup.html", {"error": "PIN must contain only digits."})
     if pin != pin_confirm:
@@ -502,7 +585,10 @@ def delete_item(request: Request, path: str = Form(...)):
             shutil.rmtree(target)
         else:
             target.unlink()
-            
+
+        client_ip = request.client.host if request.client else ""
+        log_delete(str(target), item_type, client_ip)
+
         # Return a trigger header to tell HTMX to refresh the current directory view
         return Response(
             status_code=200,
@@ -514,14 +600,12 @@ def delete_item(request: Request, path: str = Form(...)):
             }
         )
     except Exception as e:
-        # This will print out exactly why Windows rejected it in your terminal logs
-        print(f"\n[AirNode Deletion Error]: {str(e)}")
-        traceback.print_exc()
-        return Response(status_code=500, content=f"Failed to delete {item_type.lower()}: {str(e)}")
+        logger.exception("Failed to delete %s: %s", target, e)
+        return Response(status_code=500, content=f"Failed to delete {item_type.lower()}.")
 
 # --- Batch Delete Endpoint ---
 @app.post("/delete-batch")
-async def delete_batch(paths: str = Form(...)):
+async def delete_batch(request: Request, paths: str = Form(...)):
     """Deletes multiple files/folders."""
     try:
         path_list = json.loads(paths)
@@ -533,6 +617,8 @@ async def delete_batch(paths: str = Form(...)):
                     shutil.rmtree(target)
                 else:
                     target.unlink()
+        client_ip = request.client.host if request.client else ""
+        log_batch_delete(path_list, client_ip)
         return Response(
             status_code=200,
             headers={
@@ -542,7 +628,8 @@ async def delete_batch(paths: str = Form(...)):
             }
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Batch delete failed")
+        raise HTTPException(status_code=500, detail="Failed to delete items.")
 
 # --- Batch Download Endpoint ---
 @app.get("/download-batch")
@@ -601,9 +688,9 @@ def cleanup_expired_upload_sessions(ttl_hours: int = 24):
                     try:
                         shutil.rmtree(session_dir)
                     except Exception as e:
-                        print(f"[AirNode Cleanup Error] Failed to delete expired session {session_dir.name}: {e}")
+                        logger.warning("Failed to delete expired session %s: %s", session_dir.name, e)
     except Exception as e:
-        print(f"[AirNode Cleanup Error] Iteration failed: {e}")
+        logger.warning("Upload session cleanup iteration failed: %s", e)
 
 def sanitize_file_id(file_id: str) -> str:
     """Sanitizes file_id for safe use as a directory name."""
@@ -810,8 +897,8 @@ async def upload_finalize(
     except Exception as e:
         if temp_dest.exists():
             temp_dest.unlink()
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Assembly failed: {str(e)}")
+        logger.exception("Upload assembly failed for %s", safe_filename)
+        raise HTTPException(status_code=500, detail="Upload assembly failed.")
     finally:
         try:
             shutil.rmtree(session_dir)
@@ -837,7 +924,8 @@ async def upload_cancel(file_id: str):
         try:
             shutil.rmtree(session_dir)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            logger.exception("Failed to cancel upload session %s", safe_id)
+            raise HTTPException(status_code=500, detail="Failed to cancel upload.")
     return JSONResponse({"status": "cancelled"})
 
 @app.post("/upload", response_class=HTMLResponse)
@@ -857,6 +945,8 @@ async def upload_file(
         if target_dir is None:
             target_dir = ROOTS[0] if ROOTS else Path("C:/")
 
+        if not is_path_allowed(target_dir):
+            raise HTTPException(status_code=403, detail="Access denied.")
         if not target_dir.exists() or not target_dir.is_dir():
             return HTMLResponse(status_code=400, content="Target folder does not exist.")
 
@@ -887,11 +977,12 @@ async def upload_file(
 
         await stream_to_disk()
 
+        client_ip = request.client.host if request.client else ""
+        log_upload(str(target_dir), safe_filename, client_ip)
+
     except Exception as e:
-        print("\n" + "="*60 + "\n[AirNode Upload Error Traceback]")
-        traceback.print_exc()
-        print("="*60 + "\n")
-        return HTMLResponse(status_code=500, content=f"Upload error: {str(e)}")
+        logger.exception("Upload failed for %s", safe_filename)
+        return HTMLResponse(status_code=500, content="Upload failed. Check the AirNode log for details.")
     finally:
         await file.close()
 
@@ -930,7 +1021,8 @@ async def get_properties(path: str):
             "modified": modified
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to read properties for %s", target)
+        raise HTTPException(status_code=500, detail="Failed to read file properties.")
 
 @app.post("/rename")
 def rename_item(request: Request, path: str = Form(...), new_name: str = Form(...)):
@@ -958,7 +1050,10 @@ def rename_item(request: Request, path: str = Form(...), new_name: str = Form(..
     item_type = "Folder" if target.is_dir() else "File"
     try:
         os.rename(target, destination)
-        
+
+        client_ip = request.client.host if request.client else ""
+        log_rename(str(target), str(destination), item_type, client_ip)
+
         # Return a 200 with headers to refresh the directory and fire a success toast
         return Response(
             status_code=200,
@@ -970,8 +1065,8 @@ def rename_item(request: Request, path: str = Form(...), new_name: str = Form(..
             }
         )
     except Exception as e:
-        print(f"\n[AirNode Rename Error]: {str(e)}")
-        return Response(status_code=500, content=f"Failed to rename {item_type.lower()}: {str(e)}")
+        logger.exception("Failed to rename %s to %s", target, destination)
+        return Response(status_code=500, content=f"Failed to rename {item_type.lower()}.")
 
 @app.post("/new-folder")
 def create_new_folder(request: Request, current_path: str = Form(...), folder_name: str = Form(...)):
@@ -1000,7 +1095,10 @@ def create_new_folder(request: Request, current_path: str = Form(...), folder_na
     try:
         # Create the folder safely
         new_dir_path.mkdir(exist_ok=False)
-        
+
+        client_ip = request.client.host if request.client else ""
+        log_new_folder(str(new_dir_path), client_ip)
+
         return Response(
             status_code=200,
             headers={
@@ -1011,8 +1109,8 @@ def create_new_folder(request: Request, current_path: str = Form(...), folder_na
             }
         )
     except Exception as e:
-        print(f"\n[AirNode Folder Creation Error]: {str(e)}")
-        return Response(status_code=500, content=f"Failed to create folder: {str(e)}")
+        logger.exception("Failed to create folder %s in %s", clean_name, parent_dir)
+        return Response(status_code=500, content="Failed to create folder.")
 # ==============================================================================
 # Streaming File Viewer Endpoint (with HTTP Range request support)
 # ==============================================================================
@@ -1172,7 +1270,7 @@ def _save_watch_state(data: dict):
         with open(WATCH_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception as e:
-        print(f"[WatchState Save Error] {e}")
+        logger.warning("Failed to save watch state: %s", e)
 
 @app.get("/api/media/watch-state")
 def get_watch_state():
@@ -1207,7 +1305,8 @@ def clear_watch_state():
     try:
         WATCH_STATE_FILE.unlink(missing_ok=True)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to clear watch state")
+        raise HTTPException(status_code=500, detail="Failed to clear watch state.")
     return {"status": "cleared"}
 
 @app.get("/api/subtitles")
@@ -1363,7 +1462,7 @@ def scan_cinema_library(path: str = "", bust: int = 0):
                         else:
                             movies.append(item)
         except Exception as e:
-            print(f"[Cinema Scan Error] {e}")
+            logger.warning("Cinema scan error in %s: %s", root, e)
 
     # Sort episodes within seasons
     shows_list = []
@@ -1429,7 +1528,7 @@ def scan_music_library(path: str = "", bust: int = 0):
                         all_tracks.append(t_item)
                     folders_map[folder_name] = {"folder": folder_name, "path": folder_path_str, "tracks": track_items}
         except Exception as e:
-            print(f"[Music Scan Error] {e}")
+            logger.warning("Music scan error in %s: %s", root, e)
 
     result = {"folders": list(folders_map.values()), "total_tracks": len(all_tracks), "from_cache": False}
     _write_cache(cache_key, result)
@@ -1460,7 +1559,8 @@ def music_folder_tracks(path: str):
                         "ext": Path(f).suffix.lstrip(".")
                     })
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Failed to scan music folder %s", target)
+        raise HTTPException(status_code=500, detail="Failed to scan music folder.")
 
     return {"folder": target.name, "path": str(target).replace("\\", "/"), "tracks": tracks}
 
@@ -1489,7 +1589,8 @@ def cinema_folder_videos(path: str):
                         "ext": Path(f).suffix.lstrip(".")
                     })
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Failed to scan cinema folder %s", target)
+        raise HTTPException(status_code=500, detail="Failed to scan cinema folder.")
 
     return {"folder": target.name, "path": str(target).replace("\\", "/"), "videos": videos}
 

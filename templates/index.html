@@ -17,6 +17,22 @@
 
     <script src="/static/vendor/htmx.min.js" defer></script>
     <script>
+        // Global CSRF token handling — read the airnode_csrf cookie and send
+        // it as the X-CSRF-Token header on every HTMX request.
+        document.addEventListener('htmx:configRequest', (e) => {
+            const csrf = document.cookie.split('; ')
+                .find(row => row.startsWith('airnode_csrf='));
+            if (csrf) {
+                e.detail.headers['X-CSRF-Token'] = decodeURIComponent(csrf.split('=')[1]);
+            }
+        });
+
+        // Helper to get the CSRF token for fetch() calls
+        function getCsrfToken() {
+            const match = document.cookie.match(/(?:^|; )airnode_csrf=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        }
+
         document.addEventListener('alpine:init', () => {
             Alpine.data('airnode', () => ({
                 query: '',
@@ -147,6 +163,7 @@
 
                         const initResp = await fetch('/upload/init', {
                             method: 'POST',
+                            headers: { 'X-CSRF-Token': getCsrfToken() },
                             body: initFormData
                         });
 
@@ -203,6 +220,7 @@
 
                         const finalizeResp = await fetch('/upload/finalize', {
                             method: 'POST',
+                            headers: { 'X-CSRF-Token': getCsrfToken() },
                             body: finalizeFormData
                         });
 
@@ -301,6 +319,7 @@
                             };
 
                             xhr.open('POST', '/upload/chunk');
+                            xhr.setRequestHeader('X-CSRF-Token', getCsrfToken());
                             xhr.send(fd);
                         };
 
@@ -332,7 +351,10 @@
                         item.activeXhr.abort();
                         item.activeXhr = null;
                     }
-                    fetch(`/upload/cancel/${item.id}`, { method: 'DELETE' }).catch(() => {});
+                    fetch(`/upload/cancel/${item.id}`, {
+                        method: 'DELETE',
+                        headers: { 'X-CSRF-Token': getCsrfToken() }
+                    }).catch(() => {});
                     this.uploads = this.uploads.filter(u => u.id !== item.id);
                     this.processUploadQueue();
                 },
@@ -645,7 +667,11 @@
                     const fd = new FormData();
                     fd.append('paths', JSON.stringify(this.selectedItems));
                     
-                    fetch('/delete-batch', { method: 'POST', body: fd })
+                    fetch('/delete-batch', {
+                        method: 'POST',
+                        headers: { 'X-CSRF-Token': getCsrfToken() },
+                        body: fd
+                    })
                         .then(async r => {
                             if (r.ok) {
                                 this.selectedItems = [];
@@ -685,7 +711,11 @@
                     const fd = new FormData();
                     fd.append('path', this.renameModal.path);
                     fd.append('new_name', trimmed);
-                    fetch('/rename', { method: 'POST', body: fd })
+                    fetch('/rename', {
+                        method: 'POST',
+                        headers: { 'X-CSRF-Token': getCsrfToken() },
+                        body: fd
+                    })
                         .then(async r => {
                             if (r.ok) {
                                 window.dispatchEvent(new CustomEvent('refresh-directory'));
@@ -711,7 +741,11 @@
                     const fd = new FormData();
                     fd.append('current_path', this.currentPath);
                     fd.append('folder_name', trimmed);
-                    fetch('/new-folder', { method: 'POST', body: fd })
+                    fetch('/new-folder', {
+                        method: 'POST',
+                        headers: { 'X-CSRF-Token': getCsrfToken() },
+                        body: fd
+                    })
                         .then(async r => {
                             if (r.ok) {
                                 window.dispatchEvent(new CustomEvent('refresh-directory'));
@@ -733,7 +767,10 @@
 
                 confirmResetPin() {
                     this.resetPinLoading = true;
-                    fetch('/reset-pin', { method: 'POST' })
+                    fetch('/reset-pin', {
+                        method: 'POST',
+                        headers: { 'X-CSRF-Token': getCsrfToken() }
+                    })
                         .then(async r => {
                             if (r.ok) {
                                 const data = await r.json();
@@ -1421,7 +1458,8 @@
 
                 <div class="dropdown-divider"></div>
 
-                <form method="post" action="/logout">
+                <form method="post" action="/logout" x-data="{ csrf: getCsrfToken() }">
+                    <input type="hidden" name="_csrf" x-bind:value="csrf" />
                     <button class="dropdown-item" type="submit">
                         <span class="dropdown-icon"><i data-lucide="log-out" style="width:14px;height:14px;"></i></span>
                         <span>Lock</span>

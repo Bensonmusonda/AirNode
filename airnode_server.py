@@ -9,8 +9,12 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 
 from airnode_auth import delete_auth_config, has_auth_config
+from logging_config import get_logger, setup_logging
 from paths import get_resource_dir, get_data_dir, is_frozen
 from version import VERSION
+
+
+logger = get_logger(__name__)
 
 try:
     from zeroconf import IPVersion, ServiceInfo, Zeroconf
@@ -225,6 +229,27 @@ def do_uninstall_autostart() -> None:
     sys.exit(0)
 
 
+def is_port_available(port: int, host: str = "0.0.0.0") -> bool:
+    """Check if a TCP port is available for binding."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def find_available_port(preferred: int, host: str = "0.0.0.0") -> int:
+    """Return the preferred port if available, otherwise find the next free port."""
+    if is_port_available(preferred, host):
+        return preferred
+    for port in range(preferred + 1, preferred + 100):
+        if is_port_available(port, host):
+            return port
+    return preferred  # give up; uvicorn will report the real error
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run AirNode with LAN discovery, or perform maintenance tasks."
@@ -241,6 +266,11 @@ def parse_args() -> argparse.Namespace:
         "--no-mdns",
         action="store_true",
         help="Disable mDNS/Bonjour advertisement.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable debug-level logging.",
     )
     parser.add_argument(
         "--reset-pin",
@@ -262,6 +292,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    setup_logging(verbose=args.verbose)
+    logger.info("AirNode %s starting", VERSION)
 
     # Handle CLI helper commands (these exit and never start the server)
     if args.reset_pin:
@@ -270,6 +302,21 @@ def main() -> None:
         do_install_autostart()
     if args.uninstall_autostart:
         do_uninstall_autostart()
+
+    # Check port availability before starting — give a clear error instead
+    # of letting uvicorn crash with a cryptic traceback.
+    if not is_port_available(args.port, args.host):
+        alt_port = find_available_port(args.port, args.host)
+        if alt_port != args.port:
+            print(f"Port {args.port} is already in use.")
+            print(f"AirNode will use port {alt_port} instead.")
+            print(f"Open: http://localhost:{alt_port}")
+            args.port = alt_port
+        else:
+            print(f"ERROR: Port {args.port} is already in use and no free port was found.")
+            print("Close the application using that port, or specify a different port:")
+            print(f"  AirNode.exe --port <port>")
+            sys.exit(1)
 
     # Auto-open browser on first run (no PIN set yet)
     first_run = not has_auth_config()

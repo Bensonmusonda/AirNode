@@ -11,18 +11,51 @@ from paths import get_data_dir
 
 
 CONFIG_PATH = get_data_dir() / ".airnode-auth.json"
+LOCKOUT_PATH = get_data_dir() / ".airnode-lockout.json"
 COOKIE_NAME = "airnode_session"
+CSRF_COOKIE_NAME = "airnode_csrf"
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
 # --- Login lockout (brute-force protection) ---
-# In-memory only: a fresh process starts with a clean slate, which is fine
-# since the PIN itself only changes when .airnode-auth.json is deleted.
+# Persisted to disk so a restart doesn't reset the failure counter.
 MAX_FAILURES_BEFORE_LOCKOUT = 5
 BASE_LOCKOUT_SECONDS = 30
 MAX_LOCKOUT_SECONDS = 300
 
 _login_attempts_lock = threading.Lock()
 _login_attempts: dict[str, dict[str, float]] = {}
+
+
+def _load_login_attempts() -> None:
+    """Load persisted login attempts from disk into memory."""
+    global _login_attempts
+    try:
+        if LOCKOUT_PATH.exists():
+            with LOCKOUT_PATH.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Only keep records that haven't expired
+            now = time.time()
+            _login_attempts = {
+                key: record
+                for key, record in data.items()
+                if record.get("locked_until", 0) > now or record.get("failures", 0) > 0
+            }
+    except Exception:
+        _login_attempts = {}
+
+
+def _save_login_attempts() -> None:
+    """Persist login attempts to disk."""
+    try:
+        with _login_attempts_lock:
+            with LOCKOUT_PATH.open("w", encoding="utf-8") as f:
+                json.dump(_login_attempts, f)
+    except Exception:
+        pass
+
+
+# Load persisted attempts at module import time
+_load_login_attempts()
 
 
 @dataclass(frozen=True)
@@ -102,12 +135,16 @@ def create_pin(pin: str) -> AuthConfig:
 def delete_auth_config() -> None:
     """Delete the auth config file so the next launch shows /setup again.
 
-    Used by the ``--reset-pin`` CLI flag. Requires physical access to the
+    Used by the --reset-pin CLI flag. Requires physical access to the
     host machine, so security is preserved.
     """
     CONFIG_PATH.unlink(missing_ok=True)
     with _login_attempts_lock:
         _login_attempts.clear()
+    try:
+        LOCKOUT_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def verify_pin(pin: str) -> bool:
@@ -137,12 +174,14 @@ def register_login_failure(client_key: str) -> None:
             extra_strikes = record["failures"] - MAX_FAILURES_BEFORE_LOCKOUT
             lockout = min(BASE_LOCKOUT_SECONDS * (2 ** extra_strikes), MAX_LOCKOUT_SECONDS)
             record["locked_until"] = time.time() + lockout
+    _save_login_attempts()
 
 
 def register_login_success(client_key: str) -> None:
     """Clears any failure/lockout record for `client_key` after a good PIN."""
     with _login_attempts_lock:
         _login_attempts.pop(client_key, None)
+    _save_login_attempts()
 
 
 def reset_pin() -> str:
@@ -164,7 +203,20 @@ def reset_pin() -> str:
     )
     with _login_attempts_lock:
         _login_attempts.clear()
+    _save_login_attempts()
     return new_pin
+
+
+def create_csrf_token() -> str:
+    """Generate a random CSRF token for the double-submit cookie pattern."""
+    return secrets.token_urlsafe(32)
+
+
+def verify_csrf_token(cookie_token: str | None, submitted_token: str | None) -> bool:
+    """Compare the CSRF cookie value with the submitted token."""
+    if not cookie_token or not submitted_token:
+        return False
+    return hmac.compare_digest(cookie_token, submitted_token)
 
 
 def create_session_token() -> str:

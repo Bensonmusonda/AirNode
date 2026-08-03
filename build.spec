@@ -37,6 +37,8 @@ hiddenimports = (
         # Our own modules
         "main",
         "airnode_auth",
+        "audit",
+        "logging_config",
         "paths",
         "version",
     ]
