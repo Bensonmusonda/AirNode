@@ -1,7 +1,7 @@
 """License key system for AirNode.
 
-AirNode is open-source (AGPL-3.0), but a lightweight license gate is useful
-for a commercial distribution. This module provides:
+A lightweight license gate is useful for a commercial distribution.
+This module provides:
 
 - A 14-day trial that starts on first launch.
 - Product-key validation using an HMAC-SHA256 signature so keys can be

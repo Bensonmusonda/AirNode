@@ -717,14 +717,14 @@ def api_update_check(force: int = 0):
 @app.get("/api/license/status")
 def api_license_status():
     """Return the current license / trial status."""
-    from license import get_license_status
+    from license_manager import get_license_status
     return JSONResponse(get_license_status())
 
 
 @app.post("/api/license/activate")
 async def api_license_activate(request: Request):
     """Activate a product key (ABNODE-XXXXX-XXXXX-XXXXX-XXXXX)."""
-    from license import activate_key
+    from license_manager import activate_key
     body = await request.json()
     key = str(body.get("key", "")).strip()
     if not key:
@@ -738,7 +738,7 @@ async def api_license_activate(request: Request):
 @app.post("/api/license/revoke")
 def api_license_revoke():
     """Remove the activated license and return to trial mode."""
-    from license import revoke_license
+    from license_manager import revoke_license
     status = revoke_license()
     return JSONResponse({"message": "License removed.", "status": status})
 

@@ -363,11 +363,11 @@ def main() -> None:
     if args.uninstall_autostart:
         do_uninstall_autostart()
     if args.generate_key:
-        from license import generate_key
+        from license_manager import generate_key
         print(generate_key())
         sys.exit(0)
     if args.reset_trial:
-        from license import reset_trial
+        from license_manager import reset_trial
         reset_trial()
         print("Trial timer reset.")
         sys.exit(0)

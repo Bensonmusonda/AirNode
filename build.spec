@@ -54,7 +54,7 @@ hiddenimports = (
         "paths",
         "tray",
         "updater",
-        "license",
+        "license_manager",
         "video_ffmpeg",
         "version",
     ]
