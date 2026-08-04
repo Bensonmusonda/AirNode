@@ -78,6 +78,7 @@
                 uploadDrawerOpen: false,
                 uploadDrawerMinimised: false,
                 isDraggingOver: false,
+                stopping: false,
                 activeCollisionModal: null,
 
                 formatSize(bytes) {
@@ -723,6 +724,23 @@
                     } else {
                         document.documentElement.classList.remove('dark');
                     }
+                },
+
+                stopServer() {
+                    if (this.stopping) return;
+                    if (!confirm('Stop AirNode? This will close the app and stop sharing files.')) return;
+                    this.stopping = true;
+                    fetch('/api/shutdown', {
+                        method: 'POST',
+                        headers: { 'X-CSRF-Token': getCsrfToken() }
+                    })
+                        .then(() => {
+                            window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'AirNode stopped — closing this tab is safe', type: 'success' } }));
+                        })
+                        .catch(() => {
+                            this.stopping = false;
+                            window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Failed to stop AirNode. Use the system tray instead.', type: 'error' } }));
+                        });
                 },
 
                 openRename(file) {
@@ -1808,6 +1826,18 @@
                 <i data-lucide="trash-2" style="width:15px;height:15px;"></i>
             </button>
         </div>
+
+        <!-- Subtle bottom "Stop server" control — intentional low contrast so it
+             never competes with the main UI; hover brightens slightly. Sits
+             inside .layout so it inherits the airnode Alpine scope. -->
+        <button x-show="!stopping" x-cloak
+            x-on:click="stopServer()"
+            style="position:fixed; bottom:10px; right:14px; z-index:40;
+                   font-size:11px; color:var(--text-2); opacity:0.5;
+                   background:transparent; border:none; cursor:pointer;
+                   padding:4px 6px; border-radius:6px; transition:opacity 0.2s;"
+            onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.5"
+            title="Stop AirNode">Stop server</button>
     </div>
 
     <script>

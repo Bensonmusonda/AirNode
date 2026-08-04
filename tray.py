@@ -8,6 +8,7 @@ Requires ``pystray`` and ``Pillow``. If either is unavailable, tray
 functionality is gracefully skipped (the app still runs normally).
 """
 
+import os
 import sys
 import threading
 import webbrowser
@@ -88,6 +89,16 @@ def run_tray(on_restart=None, on_exit=None):
         if on_restart:
             on_restart()
 
+    def stop_app(icon, menu_item=None):
+        """Stop AirNode entirely (tray equivalent of the Stop button)."""
+        icon.stop()
+        threading.Thread(target=_hard_exit, daemon=True).start()
+
+    def _hard_exit():
+        import time
+        time.sleep(0.3)
+        os._exit(0)
+
     def exit_app(icon, menu_item=None):
         icon.stop()
         if on_exit:
@@ -120,6 +131,7 @@ def run_tray(on_restart=None, on_exit=None):
             item("Reset PIN", reset_pin),
             item(f"Autostart: {autostart_state}", toggle_autostart),
             item("Restart", restart_app),
+            item("Stop AirNode", stop_app),
             item("Exit", exit_app),
         )
 

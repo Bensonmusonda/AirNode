@@ -5,6 +5,8 @@ import signal
 import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 import webbrowser
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -350,6 +352,40 @@ def _validate_port(port: int) -> None:
         sys.exit(1)
 
 
+def _probe_airnode(port: int, timeout: float = 1.0) -> bool:
+    """Return True if an AirNode instance is already listening on `port`.
+
+    Uses the public /api/status endpoint (auth-free) so a second launch
+    can detect the running instance without any credentials. The port may
+    be busy but not AirNode (e.g. a web server) — that case returns False
+    so the caller falls back to the next-free-port logic.
+    """
+    url = f"http://127.0.0.1:{port}/api/status"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            if resp.status != 200:
+                return False
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            return bool(data.get("running")) and bool(data.get("version"))
+    except Exception:
+        return False
+
+
+def _write_pid_file(port: int) -> None:
+    """Write airnode.pid with the resolved startup info.
+
+    Format: PID on line 1, actual port on line 2. A second AirNode launch
+    reads this to find the running instance even if the config port has
+    changed in the meantime.
+    """
+    try:
+        (get_data_dir() / "airnode.pid").write_text(
+            f"{os.getpid()}\n{port}\n", encoding="utf-8"
+        )
+    except OSError:
+        logger.warning("Could not write airnode.pid")
+
+
 def main() -> None:
     args = parse_args()
     setup_logging(verbose=args.verbose)
@@ -394,6 +430,17 @@ def main() -> None:
     # Check port availability before starting — give a clear error instead
     # of letting uvicorn crash with a cryptic traceback.
     if not is_port_available(port, host):
+        # Single-instance behaviour: if the busy port is actually AirNode,
+        # don't spawn a second server — just open the running instance.
+        if _probe_airnode(port):
+            print(f"AirNode is already running on port {port}.")
+            print(f"Open: http://localhost:{port}")
+            if not args.no_browser:
+                webbrowser.open(f"http://localhost:{port}")
+            sys.exit(0)
+
+        # Port busy by something else (or unresponsive) — fall back to the
+        # next free port as before.
         alt_port = find_available_port(port, host)
         if alt_port != port:
             print(f"Port {port} is already in use.")
@@ -408,6 +455,10 @@ def main() -> None:
 
     # Store the resolved port so the tray / settings page can read it back
     os.environ.setdefault("AIRNODE_ACTUAL_PORT", str(port))
+
+    # Record the resolved port (and our pid) so a second launch can find
+    # the running instance even if the config has since changed.
+    _write_pid_file(port)
 
     # Start the system tray icon (background thread) unless disabled
     tray_thread = None

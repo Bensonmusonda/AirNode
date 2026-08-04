@@ -10,6 +10,9 @@ __pycache__/
 
 # Runtime artifacts
 airnode.pid
+airnode.db
+airnode.db-wal
+airnode.db-shm
 airnode.log
 airnode.log.err
 airnode-audit.log

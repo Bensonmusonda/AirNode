@@ -128,12 +128,12 @@ def generate_version_info(version: str) -> Path:
     StringFileInfo([
       StringTable(
         u'040904B0',
-        [StringStruct(u'CompanyName', u'AirNode'),
-         StringStruct(u'FileDescription', u'AirNode - Local Network File Explorer'),
-         StringStruct(u'FileVersion', u'{version}'),
-         StringStruct(u'InternalName', u'AirNode'),
-          StringStruct(u'LegalCopyright', u'AGPL-3.0 License'),
-         StringStruct(u'OriginalFilename', u'AirNode-{version}.exe'),
+         [StringStruct(u'CompanyName', u'AirNode'),
+          StringStruct(u'FileDescription', u'AirNode - Local Network File Explorer'),
+          StringStruct(u'FileVersion', u'{version}'),
+          StringStruct(u'InternalName', u'AirNode'),
+          StringStruct(u'LegalCopyright', u'Apache-2.0 License'),
+          StringStruct(u'OriginalFilename', u'AirNode-{version}.exe'),
          StringStruct(u'ProductName', u'AirNode'),
          StringStruct(u'ProductVersion', u'{version}')])
     ]),
@@ -172,6 +172,16 @@ def main() -> None:
         action="store_true",
         help="Build without the app icon.",
     )
+    parser.add_argument(
+        "--windowed",
+        action="store_true",
+        help="Build without a console window (released onefile only; Ctrl+C won't work — use the tray Exit / Stop button instead).",
+    )
+    parser.add_argument(
+        "--console",
+        action="store_true",
+        help="Force a console window even when AIRNODE_CONSOLE=0 is set in the environment.",
+    )
     args = parser.parse_args()
 
     # Normalize so CI can pass "v1.0.0" (from the git tag) and build.py
@@ -203,6 +213,16 @@ def main() -> None:
     # (PyInstaller does not allow --onefile/--version-file when using a .spec file)
     os.environ["AIRNODE_VERSION_FILE"] = str(version_info_path)
     os.environ["AIRNODE_ONEFILE"] = "0" if args.onedir else "1"
+
+    # Windowed mode (no console window). Only meaningful for the released
+    # onefile exe — the onedir dev build always keeps its console so URLs and
+    # startup logs stay visible. An explicit --console always wins so you can
+    # opt back into a terminal even when the env var says otherwise.
+    if args.console:
+        os.environ["AIRNODE_CONSOLE"] = "1"
+    elif args.windowed:
+        os.environ["AIRNODE_CONSOLE"] = "0"
+    # else: leave whatever the environment already says (defaults to console on)
 
     # Build with PyInstaller using the spec file
     cmd = [

@@ -94,6 +94,11 @@ version_file = os.environ.get("AIRNODE_VERSION_FILE", "")
 # Determine onefile vs onedir from environment (set by build.py)
 onefile = os.environ.get("AIRNODE_ONEFILE", "1") == "1"
 
+# Windowed mode: AIRNODE_CONSOLE=0 (set by `build.py --windowed`) suppresses
+# the console window. Onedir dev builds keep console=True so URLs/logs are
+# still visible; the released onefile is built windowed by CI.
+console_mode = os.environ.get("AIRNODE_CONSOLE", "1") == "1"
+
 if onefile:
     # Single-file executable: everything bundled into one .exe
     exe = EXE(
@@ -110,7 +115,7 @@ if onefile:
         upx=True,
         upx_exclude=[],
         runtime_tmpdir=None,
-        console=True,  # Keep console so the user can see URLs and startup messages
+        console=console_mode,  # False when AIRNODE_CONSOLE=0 (windowed release)
         disable_windowed_traceback=False,
         argv_emulation=False,
         target_arch=None,
@@ -135,7 +140,7 @@ else:
         upx=True,
         upx_exclude=[],
         runtime_tmpdir=None,
-        console=True,
+        console=True,  # onedir dev build always keeps the console
         disable_windowed_traceback=False,
         argv_emulation=False,
         target_arch=None,

@@ -143,7 +143,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-PUBLIC_PATHS = {"/login", "/setup", "/favicon.ico"}
+# /api/status is public so a second AirNode launch can detect an already-
+# running instance without credentials. It only reveals version + pid.
+PUBLIC_PATHS = {"/login", "/setup", "/favicon.ico", "/api/status"}
 PUBLIC_PREFIXES = ("/static/",)
 
 
@@ -689,6 +691,37 @@ def settings_restart():
         os._exit(0)
     threading.Thread(target=_delayed_exit, daemon=True).start()
     return JSONResponse({"message": "Restarting AirNode..."})
+
+
+@app.get("/api/status")
+def api_status():
+    """Return the current server status (version + pid).
+
+    Used by the second-instance probe and by the frontend to detect
+    that the server has stopped after a shutdown request.
+    """
+    return JSONResponse({
+        "running": True,
+        "version": VERSION,
+        "pid": os.getpid(),
+    })
+
+
+@app.post("/api/shutdown")
+def api_shutdown():
+    """Stop the AirNode process.
+
+    The response is delivered first, then the process exits after a short
+    delay so the client can show a "stopped" toast before the tab dies.
+    """
+    logger.info("Shutdown requested via /api/shutdown — exiting in 300ms...")
+
+    def _delayed_exit():
+        time.sleep(0.3)
+        os._exit(0)
+
+    threading.Thread(target=_delayed_exit, daemon=True).start()
+    return JSONResponse({"message": "AirNode is stopping..."})
 
 
 # ==============================================================================

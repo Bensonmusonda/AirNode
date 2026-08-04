@@ -122,6 +122,7 @@
                 mdnsBusy: false,
                 autostartBusy: false,
                 restarting: false,
+                stopping: false,
 
                 // License state
                 licenseStatus: null,
@@ -303,6 +304,23 @@
                     } catch (e) {
                         this.restarting = false;
                         alert('Restart failed. Please close and reopen AirNode.');
+                    }
+                },
+
+                async stopServer() {
+                    if (this.stopping) return;
+                    if (!confirm('Stop AirNode? This will close the app and stop sharing files.')) return;
+                    this.stopping = true;
+                    try {
+                        await fetch('/api/shutdown', {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': getCsrfToken() }
+                        });
+                        // The server exits ~300ms after responding; the page dies
+                        // with it, so just give the row a "stopping" look.
+                    } catch (e) {
+                        this.stopping = false;
+                        alert('Failed to stop AirNode. You can quit from the system tray instead.');
                     }
                 }
             }));
@@ -510,6 +528,33 @@
                                 </div>
                             </div>
                         </template>
+                    </div>
+                </div>
+
+                <!-- Power -->
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;">
+                        Power
+                    </div>
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">Restart AirNode</div>
+                                <div class="settings-desc">Restarts the app. Takes effect after a few seconds.</div>
+                            </div>
+                            <button class="btn-primary" style="flex-shrink: 0;" x-bind:disabled="restarting"
+                                x-on:click="restart()"
+                                x-text="restarting ? 'Restarting...' : 'Restart'"></button>
+                        </div>
+                        <div class="settings-row" style="margin-top: 10px;">
+                            <div>
+                                <div class="settings-title" style="color: var(--danger);">Stop AirNode</div>
+                                <div class="settings-desc">Closes the app and stops sharing files.</div>
+                            </div>
+                            <button class="btn-danger" style="flex-shrink: 0;" x-bind:disabled="stopping"
+                                x-on:click="stopServer()"
+                                x-text="stopping ? 'Stopping...' : 'Stop'"></button>
+                        </div>
                     </div>
                 </div>
 
