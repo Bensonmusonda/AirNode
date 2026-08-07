@@ -61,11 +61,14 @@ def setup_logging(verbose: bool = False) -> None:
         # to console-only logging rather than crashing at startup.
         pass
 
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(fmt)
-    console_handler.setLevel(logging.INFO)
-    root.addHandler(console_handler)
+    # Console handler — skipped when running windowed (console=False), where
+    # sys.stdout may be None or a null sink; the file handler above is the
+    # real destination in that case.
+    if sys.stdout is not None:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(fmt)
+        console_handler.setLevel(logging.INFO)
+        root.addHandler(console_handler)
 
 
 def get_logger(name: str) -> logging.Logger:

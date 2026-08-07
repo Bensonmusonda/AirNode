@@ -11,6 +11,40 @@ import webbrowser
 from contextlib import AbstractContextManager
 from pathlib import Path
 
+# PyInstaller windowed builds (console=False) leave sys.stdout/sys.stderr as
+# None. Any print() call or logging.StreamHandler then raises AttributeError,
+# which kills the app instantly at startup with no visible error. Replace the
+# None streams with a harmless write-only sink so startup messages, argparse
+# help/version output, and uvicorn logs become safe no-ops.
+if getattr(sys, "frozen", False) and sys.stdout is None:
+
+    _null_writer_fd = None
+
+    def _null_fd() -> int:
+        """Return a single shared fd for NUL/DEVNULL (opened lazily)."""
+        global _null_writer_fd
+        if _null_writer_fd is None:
+            _null_writer_fd = os.open(os.devnull, os.O_WRONLY)
+        return _null_writer_fd
+
+    class _NullWriter:
+        """Write-only sink that accepts and discards everything."""
+
+        def write(self, *args, **kwargs):  # noqa: D401
+            pass
+
+        def flush(self, *args, **kwargs):  # noqa: D401
+            pass
+
+        def isatty(self) -> bool:
+            return False
+
+        def fileno(self) -> int:
+            return _null_fd()
+
+    sys.stdout = _NullWriter()
+    sys.stderr = _NullWriter()
+
 from airnode_auth import delete_auth_config, has_auth_config
 from airnode_config import load_config
 from logging_config import get_logger, setup_logging
