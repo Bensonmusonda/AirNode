@@ -48,6 +48,17 @@ def log_batch_delete(paths: list[str], client_ip: str = "") -> None:
     })
 
 
+def log_batch_copy(paths: list[str], destination: str, client_ip: str = "") -> None:
+    """Log a batch copy operation."""
+    _write({
+        "action": "batch_copy",
+        "paths": paths,
+        "destination": destination,
+        "count": len(paths),
+        "client_ip": client_ip,
+    })
+
+
 def log_rename(old_path: str, new_path: str, item_type: str, client_ip: str = "") -> None:
     """Log a file or directory rename."""
     _write({

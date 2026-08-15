@@ -68,6 +68,7 @@
                 filterSize: 'all',
                 selectMode: false,
                 selectedItems: [],
+                clipboardItems: [],
 
                 /* player persistence: audio viewers stay alive when hidden so
                    the song keeps playing; video viewers are fully destroyed
@@ -705,6 +706,7 @@
                                 this.selectedItems = [];
                                 this.selectMode = false;
                                 window.dispatchEvent(new CustomEvent('refresh-directory'));
+                                window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Items deleted successfully', type: 'success' } }));
                             } else {
                                 const msg = await r.text();
                                 window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Failed to delete items', type: 'error' } }));
@@ -714,6 +716,51 @@
                             console.error('[AirNode Batch Delete Error]', err);
                             window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Failed to delete items (network error)', type: 'error' } }));
                         });
+                },
+
+                copySelected() {
+                    if (this.selectedItems.length === 0) return;
+                    this.clipboardItems = [...this.selectedItems];
+                    const count = this.clipboardItems.length;
+                    this.exitSelectMode();
+                    window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: `Copied ${count} item${count > 1 ? 's' : ''}`, type: 'success' } }));
+                },
+
+                pasteClipboard(overwrite = false) {
+                    if (this.clipboardItems.length === 0) return;
+                    
+                    const fd = new FormData();
+                    fd.append('paths', JSON.stringify(this.clipboardItems));
+                    fd.append('destination_path', this.currentPath);
+                    if (overwrite) fd.append('force_overwrite', 'true');
+                    
+                    fetch('/copy-batch', {
+                        method: 'POST',
+                        headers: { 'X-CSRF-Token': getCsrfToken() },
+                        body: fd
+                    })
+                    .then(async r => {
+                        if (r.ok) {
+                            const contentType = r.headers.get('content-type');
+                            if (contentType && contentType.includes('application/json')) {
+                                const data = await r.json();
+                                if (data.collision) {
+                                    window.dispatchEvent(new CustomEvent('batch-collision-detected'));
+                                    return;
+                                }
+                            }
+                            this.clipboardItems = [];
+                            window.dispatchEvent(new CustomEvent('refresh-directory'));
+                            window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Items pasted successfully', type: 'success' } }));
+                        } else {
+                            const msg = await r.text();
+                            window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: msg || 'Failed to paste items', type: 'error' } }));
+                        }
+                    })
+                    .catch(err => {
+                        console.error('[AirNode Paste Error]', err);
+                        window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'Failed to paste items (network error)', type: 'error' } }));
+                    });
                 },
 
                 toggleDarkMode() {
@@ -1036,6 +1083,33 @@
                                 contextMenu = null;
                                 document.getElementById('force-overwrite-input').value = 'true';
                                 htmx.trigger('#file-upload-form', 'submit');
+                            ">
+                        Overwrite
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal-overlay" 
+            x-data="{ showBatchCollision: false }"
+            x-show="showBatchCollision" 
+            x-on:batch-collision-detected.window="showBatchCollision = true"
+            style="display: none;"
+            x-transition>
+            <div class="modal-card" x-on:click.outside="showBatchCollision = false">
+                <div style="display: flex; gap: 10px; align-items: center; color: var(--text);">
+                    <i data-lucide="alert-triangle" style="stroke: var(--warning, #f59e0b); width:20px; height:20px;"></i>
+                    <h4 style="margin:0; font-size:15px; font-weight:600;">Items Already Exist</h4>
+                </div>
+                <p style="font-size: 13px; color: var(--text-2); margin: 0; line-height: 1.5;">
+                    One or more items you are pasting already exist in this folder. Do you want to overwrite them?
+                </p>
+                <div class="modal-actions">
+                    <button class="modal-btn" x-on:click="showBatchCollision = false">Cancel</button>
+                    <button class="modal-btn primary"
+                            x-on:click="
+                                showBatchCollision = false;
+                                pasteClipboard(true);
                             ">
                         Overwrite
                     </button>
@@ -1821,9 +1895,42 @@
                 <i data-lucide="download" style="width:15px;height:15px;"></i>
             </button>
 
+            <!-- Copy -->
+            <button class="batch-btn" x-on:click="copySelected()" :disabled="selectedItems.length === 0" aria-label="Copy">
+                <i data-lucide="copy" style="width:15px;height:15px;"></i>
+            </button>
+
             <!-- Delete -->
             <button class="batch-btn batch-btn-danger" x-on:click="deleteSelected()" :disabled="selectedItems.length === 0" aria-label="Delete">
                 <i data-lucide="trash-2" style="width:15px;height:15px;"></i>
+            </button>
+        </div>
+
+        <div class="batch-action-bar"
+            x-show="clipboardItems.length > 0 && !selectMode"
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="opacity-0 translate-y-4"
+            x-transition:enter-end="opacity-100 translate-y-0"
+            x-transition:leave="transition ease-in duration-150"
+            x-transition:leave-start="opacity-100 translate-y-0"
+            x-transition:leave-end="opacity-0 translate-y-4"
+            style="display:none; bottom:80px;">
+
+            <!-- Cancel -->
+            <button class="batch-btn batch-btn-cancel" x-on:click="clipboardItems = []" aria-label="Cancel">
+                <i data-lucide="x" style="width:15px;height:15px;"></i>
+            </button>
+
+            <!-- Count -->
+            <span class="batch-count" x-text="`${clipboardItems.length} copied`"></span>
+
+            <!-- Divider -->
+            <div class="batch-divider"></div>
+
+            <!-- Paste -->
+            <button class="batch-btn" x-on:click="pasteClipboard()" style="display:flex; align-items:center; gap:6px; padding:0 12px; font-weight:600;" aria-label="Paste">
+                <i data-lucide="clipboard-paste" style="width:15px;height:15px;"></i>
+                <span style="font-size:13px;">Paste</span>
             </button>
         </div>
 

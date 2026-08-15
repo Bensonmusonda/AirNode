@@ -40,6 +40,7 @@ from airnode_auth import (
 )
 from airnode_config import load_config, save_config
 from audit import (
+    log_batch_copy,
     log_batch_delete,
     log_delete,
     log_new_folder,
@@ -894,6 +895,56 @@ async def delete_batch(request: Request, paths: str = Form(...)):
     except Exception as e:
         logger.exception("Batch delete failed")
         raise HTTPException(status_code=500, detail="Failed to delete items.")
+
+# --- Batch Copy Endpoint ---
+@app.post("/copy-batch")
+async def copy_batch(request: Request, paths: str = Form(...), destination_path: str = Form(...), force_overwrite: str = Form("false")):
+    """Copies multiple files/folders to a new destination."""
+    try:
+        path_list = json.loads(paths)
+        target_dir = resolve_target(destination_path)
+        
+        if not target_dir or not is_path_allowed(target_dir) or not target_dir.exists() or not target_dir.is_dir():
+            raise HTTPException(status_code=400, detail="Invalid destination folder.")
+
+        # Pre-flight check for collisions
+        if force_overwrite != "true":
+            for p in path_list:
+                src = resolve_target(p)
+                if src and src.exists():
+                    dest = target_dir / src.name
+                    if dest.exists():
+                        return JSONResponse(status_code=200, content={"collision": True})
+
+        # Perform the actual copy
+        for p in path_list:
+            src = resolve_target(p)
+            if src and is_path_allowed(src) and src.exists():
+                dest = target_dir / src.name
+                
+                # If force_overwrite is true and we're copying a file over a file, or dir over dir,
+                # we handle it properly.
+                if src.is_dir():
+                    shutil.copytree(src, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src, dest)
+                    
+        client_ip = request.client.host if request.client else ""
+        log_batch_copy(path_list, str(target_dir), client_ip)
+        
+        return Response(
+            status_code=200,
+            headers={
+                "HX-Trigger": json.dumps({
+                    "refresh-directory": {},
+                    "clear-clipboard": {},
+                    "show-toast": {"message": "Items copied successfully", "type": "success"}
+                })
+            }
+        )
+    except Exception as e:
+        logger.exception("Batch copy failed")
+        raise HTTPException(status_code=500, detail="Failed to copy items.")
 
 # --- Batch Download Endpoint ---
 @app.get("/download-batch")
