@@ -119,6 +119,8 @@
                 port: {{ config.port }},
                 mdns: {{ 'true' if config.mdns_enabled else 'false' }},
                 autostart: {{ 'true' if actual_autostart else 'false' }},
+                networkHost: {{ config.host | tojson }},
+                networkBusy: false,
                 mdnsBusy: false,
                 autostartBusy: false,
                 restarting: false,
@@ -207,6 +209,32 @@
 
                 get portInput() {
                     return this.$refs.portInput;
+                },
+
+                async saveNetwork() {
+                    if (this.networkBusy) return;
+                    this.networkBusy = true;
+                    const msg = this.$refs.networkMsg;
+                    try {
+                        const res = await fetch('/settings/network', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
+                            body: JSON.stringify({ host: this.networkHost })
+                        });
+                        const data = await res.json();
+                        if (data.error) {
+                            msg.className = 'settings-msg show err';
+                            msg.textContent = data.error;
+                        } else {
+                            msg.className = 'settings-msg show ok';
+                            msg.textContent = data.message;
+                        }
+                    } catch (e) {
+                        msg.className = 'settings-msg show err';
+                        msg.textContent = 'Failed to save network setting.';
+                    } finally {
+                        this.networkBusy = false;
+                    }
                 },
 
                 async savePort() {
@@ -342,6 +370,26 @@
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     <div style="font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;">
                         Connection
+                    </div>
+
+                    <!-- Network Interface -->
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">Network Interface</div>
+                                <div class="settings-desc">Restrict AirNode to one specific network</div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                                <select x-model="networkHost"
+                                    style="padding: 7px 10px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 13px; max-width: 220px;">
+                                    {% for iface in network_interfaces %}
+                                    <option value="{{ iface.ip }}">{{ iface.display }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button class="btn-primary" x-bind:disabled="networkBusy" x-on:click="saveNetwork()">Apply</button>
+                            </div>
+                        </div>
+                        <div x-ref="networkMsg" class="settings-msg"></div>
                     </div>
 
                     <!-- Port -->

@@ -620,10 +620,12 @@ def connect(request: Request):
 def settings_page(request: Request):
     """Renders the system settings page."""
     from autostart import is_autostart_enabled
+    from airnode_server import get_network_interfaces
     cfg = load_config()
     return _render(request, "settings.html", {
         "config": cfg,
         "actual_autostart": is_autostart_enabled(),
+        "network_interfaces": get_network_interfaces(),
         "version": VERSION,
     })
 
@@ -707,6 +709,28 @@ async def settings_port(request: Request):
     save_config(cfg)
     logger.info("Port changed to %s (restart required)", port)
     return JSONResponse({"message": f"Port set to {port}. Restart AirNode to apply."})
+
+
+@app.post("/settings/network")
+async def settings_network(request: Request):
+    """Set the network interface AirNode binds to. Requires restart."""
+    body = await request.json()
+    host = str(body.get("host", "0.0.0.0")).strip()
+
+    # Validate: must be 0.0.0.0 or a plausible IPv4 address
+    import re
+    if host != "0.0.0.0" and not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+        return JSONResponse(status_code=400, content={"error": "Invalid IP address."})
+
+    cfg = load_config()
+    cfg.host = host
+    save_config(cfg)
+    label = "all networks" if host == "0.0.0.0" else host
+    logger.info("Bind interface changed to %s (restart required)", host)
+    return JSONResponse({"message": f"Network set to {label}. Restart AirNode to apply."})
+
+
+
 
 
 @app.post("/settings/mdns/toggle")

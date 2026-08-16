@@ -97,6 +97,32 @@ def get_lan_ipv4_addresses() -> list[str]:
     return sorted(addresses)
 
 
+def get_network_interfaces() -> list[dict]:
+    """Return a list of non-loopback IPv4 interfaces with human-readable names.
+
+    Each entry: {"name": "Wi-Fi", "ip": "192.168.1.5", "display": "Wi-Fi — 192.168.1.5"}
+    Always prepends the special "All Networks" entry (0.0.0.0).
+    """
+    interfaces = [{"name": "All Networks (default)", "ip": "0.0.0.0", "display": "All Networks (default)"}]
+    try:
+        import ifaddr
+        for adapter in ifaddr.get_adapters():
+            for ip in adapter.ips:
+                # Only IPv4, skip loopback
+                if isinstance(ip.ip, str) and not ip.ip.startswith("127."):
+                    name = adapter.nice_name or adapter.name
+                    interfaces.append({
+                        "name": name,
+                        "ip": ip.ip,
+                        "display": f"{name} \u2014 {ip.ip}",
+                    })
+    except Exception:
+        # ifaddr not available or failed — fall back to socket-based detection
+        for addr in get_lan_ipv4_addresses():
+            interfaces.append({"name": addr, "ip": addr, "display": addr})
+    return interfaces
+
+
 class MdnsAdvertisement(AbstractContextManager):
     def __init__(self, port: int, enabled: bool = True) -> None:
         self.port = port
