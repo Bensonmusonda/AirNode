@@ -219,6 +219,20 @@ async def require_authentication(request: Request, call_next):
     if path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES):
         return await call_next(request)
 
+    # Network enforcement: check if the incoming network is trusted.
+    # Localhost is always exempt so the host machine can never be locked out.
+    client_host = (request.client.host if request.client else "") or ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        from network_trust import is_enforcement_enabled, get_current_network, is_network_trusted
+        if is_enforcement_enabled():
+            current_net = get_current_network()
+            if not is_network_trusted(current_net):
+                display = current_net["display"] if current_net else "Unknown network"
+                return _render(request, "network_blocked.html", {
+                    "network_display": display,
+                    "version": VERSION,
+                }, status_code=403)
+
     if verify_session_token(request.cookies.get(COOKIE_NAME)):
         # CSRF check for state-changing requests (double-submit cookie pattern).
         # The CSRF token is set as a cookie on login and must be echoed back
@@ -690,6 +704,66 @@ async def reset_pin_submit(request: Request):
         max_age=SESSION_MAX_AGE_SECONDS,
     )
     return response
+
+
+# ==============================================================================
+# Trusted Networks API
+# ==============================================================================
+
+@app.get("/api/networks/current")
+def api_networks_current():
+    """Return the currently detected network fingerprint."""
+    from network_trust import get_current_network
+    net = get_current_network()
+    if net is None:
+        return JSONResponse({"detected": False, "display": "Could not detect network"})
+    return JSONResponse({"detected": True, **net})
+
+
+@app.get("/api/networks/trusted")
+def api_networks_trusted():
+    """Return the trusted networks list and enforcement state."""
+    from network_trust import get_trusted_networks, is_enforcement_enabled
+    return JSONResponse({
+        "enforcement": is_enforcement_enabled(),
+        "networks": get_trusted_networks(),
+    })
+
+
+@app.post("/api/networks/trusted")
+async def api_networks_add(request: Request):
+    """Add a network to the trusted list."""
+    from network_trust import add_trusted_network
+    body = await request.json()
+    ssid = body.get("ssid") or None
+    gateway_mac = body.get("gateway_mac") or None
+    label = str(body.get("label") or ssid or gateway_mac or "Network")
+    if not ssid and not gateway_mac:
+        return JSONResponse(status_code=400, content={"error": "ssid or gateway_mac required."})
+    entry = add_trusted_network(ssid, gateway_mac, label)
+    return JSONResponse({"ok": True, "network": entry})
+
+
+@app.delete("/api/networks/trusted/{fingerprint:path}")
+async def api_networks_remove(fingerprint: str):
+    """Remove a network from the trusted list by fingerprint."""
+    from network_trust import remove_trusted_network
+    removed = remove_trusted_network(fingerprint)
+    return JSONResponse({"ok": removed})
+
+
+@app.post("/api/networks/enforcement")
+async def api_networks_enforcement(request: Request):
+    """Toggle or set network enforcement."""
+    from network_trust import set_enforcement, get_trusted_networks, is_enforcement_enabled
+    body = await request.json()
+    enabled = bool(body.get("enabled", False))
+    if enabled and not get_trusted_networks():
+        return JSONResponse(status_code=400, content={
+            "error": "Add at least one trusted network before enabling enforcement."
+        })
+    set_enforcement(enabled)
+    return JSONResponse({"ok": True, "enforcement": is_enforcement_enabled()})
 
 
 @app.post("/settings/port")

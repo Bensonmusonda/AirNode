@@ -126,6 +126,14 @@
                 restarting: false,
                 stopping: false,
 
+                // Trusted Networks
+                currentNetwork: null,
+                currentNetworkLoading: true,
+                trustedNetworks: [],
+                trustedEnforcement: false,
+                trustBusy: false,
+                trustMsg: { show: false, text: '', ok: false },
+
                 // License state
                 licenseStatus: null,
                 licenseKey: '',
@@ -140,6 +148,100 @@
                 async init() {
                     this.refreshLicense();
                     this.refreshUpdate();
+                    this.loadTrustedNetworks();
+                    // Detect current network
+                    fetch('/api/networks/current')
+                        .then(r => r.json())
+                        .then(d => { this.currentNetwork = d; })
+                        .catch(() => { this.currentNetwork = { detected: false, display: 'Detection failed' }; })
+                        .finally(() => { this.currentNetworkLoading = false; });
+                },
+
+                async loadTrustedNetworks() {
+                    try {
+                        const r = await fetch('/api/networks/trusted');
+                        const d = await r.json();
+                        this.trustedNetworks = d.networks || [];
+                        this.trustedEnforcement = d.enforcement || false;
+                    } catch (e) {
+                        console.error('[AirNode Networks]', e);
+                    }
+                },
+
+                currentIsAlreadyTrusted() {
+                    if (!this.currentNetwork?.fingerprint) return false;
+                    return this.trustedNetworks.some(n => n.fingerprint === this.currentNetwork.fingerprint);
+                },
+
+                async addCurrentNetwork() {
+                    if (!this.currentNetwork?.detected || this.currentIsAlreadyTrusted()) return;
+                    this.trustBusy = true;
+                    this.trustMsg.show = false;
+                    try {
+                        const res = await fetch('/api/networks/trusted', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
+                            body: JSON.stringify({
+                                ssid: this.currentNetwork.ssid || null,
+                                gateway_mac: this.currentNetwork.gateway_mac || null,
+                                label: this.currentNetwork.display,
+                            })
+                        });
+                        const d = await res.json();
+                        if (d.ok) {
+                            await this.loadTrustedNetworks();
+                            this.trustMsg = { show: true, text: 'Network added to trusted list.', ok: true };
+                        } else {
+                            this.trustMsg = { show: true, text: d.error || 'Failed to add network.', ok: false };
+                        }
+                    } catch (e) {
+                        this.trustMsg = { show: true, text: 'Failed to add network.', ok: false };
+                    } finally {
+                        this.trustBusy = false;
+                    }
+                },
+
+                async removeNetwork(fingerprint) {
+                    this.trustBusy = true;
+                    this.trustMsg.show = false;
+                    try {
+                        const res = await fetch('/api/networks/trusted/' + encodeURIComponent(fingerprint), {
+                            method: 'DELETE',
+                            headers: { 'X-CSRF-Token': getCsrfToken() }
+                        });
+                        const d = await res.json();
+                        if (d.ok) {
+                            await this.loadTrustedNetworks();
+                            this.trustMsg = { show: true, text: 'Network removed.', ok: true };
+                        }
+                    } catch (e) {
+                        this.trustMsg = { show: true, text: 'Failed to remove network.', ok: false };
+                    } finally {
+                        this.trustBusy = false;
+                    }
+                },
+
+                async setEnforcement(enabled) {
+                    this.trustBusy = true;
+                    this.trustMsg.show = false;
+                    try {
+                        const res = await fetch('/api/networks/enforcement', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
+                            body: JSON.stringify({ enabled })
+                        });
+                        const d = await res.json();
+                        if (d.ok) {
+                            this.trustedEnforcement = d.enforcement;
+                            this.trustMsg = { show: true, text: enabled ? 'Enforcement enabled. Only trusted networks can connect.' : 'Enforcement disabled.', ok: true };
+                        } else {
+                            this.trustMsg = { show: true, text: d.error || 'Failed.', ok: false };
+                        }
+                    } catch (e) {
+                        this.trustMsg = { show: true, text: 'Failed to update enforcement.', ok: false };
+                    } finally {
+                        this.trustBusy = false;
+                    }
                 },
 
                 async refreshLicense() {
@@ -435,6 +537,74 @@
                         </div>
                         <div x-ref="autostartMsg" class="settings-msg"></div>
                     </div>
+                </div>
+
+                <!-- Trusted Networks -->
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px;">
+                        Trusted Networks
+                    </div>
+
+                    <!-- Enforcement toggle -->
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">Restrict to trusted networks only</div>
+                                <div class="settings-desc" x-text="trustedNetworks.length === 0 ? 'Add a network below before enabling' : (trustedEnforcement ? 'Only trusted networks can connect' : 'All networks are allowed')"></div>
+                            </div>
+                            <button role="switch" class="toggle" :class="trustedEnforcement ? 'toggle-on' : ''"
+                                :aria-checked="trustedEnforcement.toString()"
+                                :disabled="trustedBusy || trustedNetworks.length === 0"
+                                x-on:click="setEnforcement(!trustedEnforcement)"></button>
+                        </div>
+                    </div>
+
+                    <!-- Current network -->
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">Current Network</div>
+                                <div class="settings-desc">
+                                    <span x-show="currentNetworkLoading">Detecting...</span>
+                                    <span x-show="!currentNetworkLoading" x-text="currentNetwork?.display || 'Could not detect'"></span>
+                                </div>
+                            </div>
+                            <button class="btn-primary" style="flex-shrink:0;"
+                                x-bind:disabled="trustBusy || currentNetworkLoading || !currentNetwork?.detected || currentIsAlreadyTrusted()"
+                                x-on:click="addCurrentNetwork()">
+                                <span x-text="currentIsAlreadyTrusted() ? 'Already Trusted' : 'Add to Trusted'"></span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Trusted list -->
+                    <template x-if="trustedNetworks.length > 0">
+                        <div style="display:flex;flex-direction:column;gap:8px;">
+                            <template x-for="net in trustedNetworks" :key="net.id">
+                                <div class="settings-card">
+                                    <div class="settings-row">
+                                        <div>
+                                            <div class="settings-title" x-text="net.label"></div>
+                                            <div class="settings-desc" x-text="net.fingerprint"></div>
+                                        </div>
+                                        <button class="btn-danger" style="flex-shrink:0;font-size:12px;padding:5px 10px;"
+                                            x-bind:disabled="trustBusy"
+                                            x-on:click="removeNetwork(net.fingerprint)">Remove</button>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+
+                    <template x-if="trustedNetworks.length === 0">
+                        <div style="font-size:12px;color:var(--text-2);text-align:center;padding:8px 0;">No trusted networks saved yet.</div>
+                    </template>
+
+                    <!-- Feedback message -->
+                    <div x-show="trustMsg.show"
+                        :class="trustMsg.ok ? 'settings-msg show ok' : 'settings-msg show err'"
+                        x-text="trustMsg.text"
+                        style="display:none;"></div>
                 </div>
 
                 <!-- Access -->
