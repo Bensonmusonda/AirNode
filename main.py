@@ -4,6 +4,7 @@ import os
 import sys
 import shutil
 import string
+import uuid
 import ctypes
 import mimetypes
 import json
@@ -17,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, RedirectResponse, JSONResponse
-from fastapi import UploadFile, Form, File
+from fastapi import UploadFile, Form, File, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exception_handlers import http_exception_handler
 import time
@@ -897,8 +898,32 @@ async def delete_batch(request: Request, paths: str = Form(...)):
         raise HTTPException(status_code=500, detail="Failed to delete items.")
 
 # --- Batch Copy Endpoint ---
+
+copy_tasks = {}
+
+def perform_copy(task_id: str, paths: list[str], target_dir: Path, force_overwrite: bool, client_ip: str):
+    try:
+        copy_tasks[task_id]["status"] = "copying"
+        for p in paths:
+            src = resolve_target(p)
+            if src and is_path_allowed(src) and src.exists():
+                dest = target_dir / src.name
+                
+                if src.is_dir():
+                    shutil.copytree(src, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src, dest)
+                    
+        log_batch_copy(paths, str(target_dir), client_ip)
+        copy_tasks[task_id]["status"] = "completed"
+    except Exception as e:
+        logger.exception("Async copy failed")
+        if task_id in copy_tasks:
+            copy_tasks[task_id]["status"] = "failed"
+            copy_tasks[task_id]["error"] = str(e)
+
 @app.post("/copy-batch")
-async def copy_batch(request: Request, paths: str = Form(...), destination_path: str = Form(...), force_overwrite: str = Form("false")):
+async def copy_batch(request: Request, background_tasks: BackgroundTasks, paths: str = Form(...), destination_path: str = Form(...), force_overwrite: str = Form("false")):
     """Copies multiple files/folders to a new destination."""
     try:
         path_list = json.loads(paths)
@@ -916,35 +941,27 @@ async def copy_batch(request: Request, paths: str = Form(...), destination_path:
                     if dest.exists():
                         return JSONResponse(status_code=200, content={"collision": True})
 
-        # Perform the actual copy
-        for p in path_list:
-            src = resolve_target(p)
-            if src and is_path_allowed(src) and src.exists():
-                dest = target_dir / src.name
-                
-                # If force_overwrite is true and we're copying a file over a file, or dir over dir,
-                # we handle it properly.
-                if src.is_dir():
-                    shutil.copytree(src, dest, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(src, dest)
-                    
-        client_ip = request.client.host if request.client else ""
-        log_batch_copy(path_list, str(target_dir), client_ip)
+        # Offload actual copy
+        task_id = str(uuid.uuid4())
+        copy_tasks[task_id] = {"status": "starting"}
         
-        return Response(
-            status_code=200,
-            headers={
-                "HX-Trigger": json.dumps({
-                    "refresh-directory": {},
-                    "clear-clipboard": {},
-                    "show-toast": {"message": "Items copied successfully", "type": "success"}
-                })
-            }
-        )
+        client_ip = request.client.host if request.client else ""
+        background_tasks.add_task(perform_copy, task_id, path_list, target_dir, force_overwrite == "true", client_ip)
+        
+        return JSONResponse(status_code=202, content={"task_id": task_id})
     except Exception as e:
-        logger.exception("Batch copy failed")
-        raise HTTPException(status_code=500, detail="Failed to copy items.")
+        logger.exception("Batch copy start failed")
+        raise HTTPException(status_code=500, detail="Failed to start copy.")
+
+@app.get("/api/copy-status/{task_id}")
+async def get_copy_status(task_id: str):
+    if task_id not in copy_tasks:
+        return JSONResponse(status_code=404, content={"status": "not_found"})
+    status = copy_tasks[task_id]
+    if status["status"] in ["completed", "failed"]:
+        val = copy_tasks.pop(task_id)
+        return JSONResponse(content=val)
+    return JSONResponse(content=status)
 
 # --- Batch Download Endpoint ---
 @app.get("/download-batch")
