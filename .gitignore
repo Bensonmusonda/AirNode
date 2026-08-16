@@ -22,6 +22,9 @@ airnode-audit.log
 .airnode_update_cache.json
 .airnode_upload_temp/
 .airnode_cache/
+certs/
+*.crt
+*.key
 static/generated/
 
 

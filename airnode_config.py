@@ -22,6 +22,7 @@ DEFAULTS = {
     "port": 8000,
     "host": "0.0.0.0",
     "mdns_enabled": True,
+    "https_enabled": False,
     "autostart": False,
     "last_visited": "/",
 }
@@ -33,6 +34,7 @@ class AirNodeConfig:
     port: int = DEFAULTS["port"]
     host: str = DEFAULTS["host"]
     mdns_enabled: bool = DEFAULTS["mdns_enabled"]
+    https_enabled: bool = DEFAULTS["https_enabled"]
     autostart: bool = DEFAULTS["autostart"]
     last_visited: str = DEFAULTS["last_visited"]
 
@@ -41,6 +43,7 @@ class AirNodeConfig:
             "port": self.port,
             "host": self.host,
             "mdns_enabled": self.mdns_enabled,
+            "https_enabled": self.https_enabled,
             "autostart": self.autostart,
             "last_visited": self.last_visited,
         }
@@ -51,6 +54,7 @@ class AirNodeConfig:
             port=int(data.get("port", DEFAULTS["port"])),
             host=str(data.get("host", DEFAULTS["host"])),
             mdns_enabled=bool(data.get("mdns_enabled", DEFAULTS["mdns_enabled"])),
+            https_enabled=bool(data.get("https_enabled", DEFAULTS["https_enabled"])),
             autostart=bool(data.get("autostart", DEFAULTS["autostart"])),
             last_visited=str(data.get("last_visited", DEFAULTS["last_visited"])),
         )

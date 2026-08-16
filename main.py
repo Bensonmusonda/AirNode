@@ -147,7 +147,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 # /api/status is public so a second AirNode launch can detect an already-
 # running instance without credentials. It only reveals version + pid.
-PUBLIC_PATHS = {"/login", "/setup", "/reset-pin", "/favicon.ico", "/api/status"}
+PUBLIC_PATHS = {"/login", "/setup", "/reset-pin", "/favicon.ico", "/api/status", "/ca.crt", "/airnode-ca.mobileconfig"}
 PUBLIC_PREFIXES = ("/static/",)
 
 
@@ -490,11 +490,13 @@ def login_submit(
     register_login_success(client_key)
     redirect_to = next_url if next_url.startswith("/") and not next_url.startswith("//") else "/"
     response = RedirectResponse(url=redirect_to, status_code=303)
+    is_secure = request.url.scheme == "https" or os.environ.get("AIRNODE_HTTPS") == "1"
     response.set_cookie(
         COOKIE_NAME,
         create_session_token(),
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
+        secure=is_secure,
         samesite="lax",
     )
     response.set_cookie(
@@ -502,6 +504,7 @@ def login_submit(
         create_csrf_token(),
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=False,  # JS needs to read it to send back as a header
+        secure=is_secure,
         samesite="lax",
     )
     return response
@@ -635,11 +638,13 @@ def settings_page(request: Request):
     """Renders the system settings page."""
     from autostart import is_autostart_enabled
     from airnode_server import get_network_interfaces
+    from tls_cert import is_ca_installed_in_windows_store
     cfg = load_config()
     return _render(request, "settings.html", {
         "config": cfg,
         "actual_autostart": is_autostart_enabled(),
         "network_interfaces": get_network_interfaces(),
+        "ca_installed": is_ca_installed_in_windows_store(),
         "version": VERSION,
     })
 
@@ -692,15 +697,16 @@ async def reset_pin_submit(request: Request):
     # Issue a fresh session so the user lands straight on the dashboard.
     session_token = create_session_token()
     csrf_token = create_csrf_token()
+    is_secure = request.url.scheme == "https" or os.environ.get("AIRNODE_HTTPS") == "1"
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         COOKIE_NAME, session_token,
-        httponly=True, samesite="lax",
+        httponly=True, secure=is_secure, samesite="lax",
         max_age=SESSION_MAX_AGE_SECONDS,
     )
     response.set_cookie(
         CSRF_COOKIE_NAME, csrf_token,
-        httponly=False, samesite="lax",
+        httponly=False, secure=is_secure, samesite="lax",
         max_age=SESSION_MAX_AGE_SECONDS,
     )
     return response
@@ -816,6 +822,61 @@ def settings_mdns_toggle():
     state = "enabled" if cfg.mdns_enabled else "disabled"
     logger.info("mDNS %s (restart required)", state)
     return JSONResponse({"message": f"mDNS {state}. Restart AirNode to apply."})
+
+
+@app.post("/settings/https/toggle")
+def settings_https_toggle():
+    """Toggle HTTPS transport encryption. Requires restart to take effect."""
+    cfg = load_config()
+    cfg.https_enabled = not cfg.https_enabled
+    save_config(cfg)
+    state = "enabled" if cfg.https_enabled else "disabled"
+    logger.info("HTTPS %s (restart required)", state)
+    return JSONResponse({"message": f"HTTPS {state}. Restart AirNode to apply."})
+
+
+@app.post("/settings/ca/install")
+def settings_ca_install():
+    """Attempt to register the Local Root CA into the Windows Certificate store."""
+    from tls_cert import ensure_root_ca, install_ca_to_windows_store, is_ca_installed_in_windows_store
+    ca_cert, _ = ensure_root_ca()
+    success = install_ca_to_windows_store(ca_cert)
+    installed = is_ca_installed_in_windows_store()
+    return JSONResponse({"ok": success or installed, "installed": installed})
+
+
+# ==============================================================================
+# Certificate Download Endpoints (Public)
+# ==============================================================================
+
+@app.get("/ca.crt")
+def download_ca_crt():
+    """Download the AirNode Local Root CA certificate (PEM format)."""
+    try:
+        from tls_cert import get_ca_cert_pem
+        return Response(
+            content=get_ca_cert_pem(),
+            media_type="application/x-x509-ca-cert",
+            headers={"Content-Disposition": 'attachment; filename="airnode-ca.crt"'},
+        )
+    except Exception as exc:
+        logger.exception("Failed to serve ca.crt")
+        raise HTTPException(status_code=500, detail="Failed to retrieve Root CA certificate.")
+
+
+@app.get("/airnode-ca.mobileconfig")
+def download_mobileconfig():
+    """Download the Apple .mobileconfig profile for 1-tap iOS / macOS Root CA enrollment."""
+    try:
+        from tls_cert import generate_mobileconfig
+        return Response(
+            content=generate_mobileconfig(),
+            media_type="application/x-apple-aspen-config",
+            headers={"Content-Disposition": 'attachment; filename="airnode-ca.mobileconfig"'},
+        )
+    except Exception as exc:
+        logger.exception("Failed to serve .mobileconfig profile")
+        raise HTTPException(status_code=500, detail="Failed to generate mobile configuration profile.")
 
 
 @app.post("/settings/autostart/toggle")

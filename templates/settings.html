@@ -118,10 +118,14 @@
             Alpine.data('settings', () => ({
                 port: {{ config.port }},
                 mdns: {{ 'true' if config.mdns_enabled else 'false' }},
+                https: {{ 'true' if config.https_enabled else 'false' }},
                 autostart: {{ 'true' if actual_autostart else 'false' }},
                 networkHost: {{ config.host | tojson }},
                 networkBusy: false,
                 mdnsBusy: false,
+                httpsBusy: false,
+                caInstalled: {{ 'true' if ca_installed else 'false' }},
+                caBusy: false,
                 autostartBusy: false,
                 restarting: false,
                 stopping: false,
@@ -393,6 +397,58 @@
                     }
                 },
 
+                async toggleHttps() {
+                    if (this.httpsBusy) return;
+                    this.httpsBusy = true;
+                    const msg = this.$refs.httpsMsg;
+                    try {
+                        const res = await fetch('/settings/https/toggle', {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': getCsrfToken() }
+                        });
+                        const data = await res.json();
+                        if (data.error) {
+                            msg.className = 'settings-msg show err';
+                            msg.textContent = data.error;
+                        } else {
+                            this.https = !this.https;
+                            msg.className = 'settings-msg show ok';
+                            msg.textContent = data.message;
+                        }
+                    } catch (e) {
+                        msg.className = 'settings-msg show err';
+                        msg.textContent = 'Failed to toggle HTTPS.';
+                    } finally {
+                        this.httpsBusy = false;
+                    }
+                },
+
+                async installCaCert() {
+                    if (this.caBusy) return;
+                    this.caBusy = true;
+                    const msg = this.$refs.httpsMsg;
+                    try {
+                        const res = await fetch('/settings/ca/install', {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': getCsrfToken() }
+                        });
+                        const data = await res.json();
+                        if (data.installed) {
+                            this.caInstalled = true;
+                            msg.className = 'settings-msg show ok';
+                            msg.textContent = 'Root CA registered in Windows Certificate Store.';
+                        } else {
+                            msg.className = 'settings-msg show err';
+                            msg.textContent = 'Certificate installation was cancelled or failed.';
+                        }
+                    } catch (e) {
+                        msg.className = 'settings-msg show err';
+                        msg.textContent = 'Failed to install certificate.';
+                    } finally {
+                        this.caBusy = false;
+                    }
+                },
+
                 async toggleAutostart() {
                     if (this.autostartBusy) return;
                     this.autostartBusy = true;
@@ -522,6 +578,20 @@
                                 x-on:click="toggleMdns()"></button>
                         </div>
                         <div x-ref="mdnsMsg" class="settings-msg"></div>
+                    </div>
+
+                    <!-- HTTPS / TLS Toggle -->
+                    <div class="settings-card">
+                        <div class="settings-row">
+                            <div>
+                                <div class="settings-title">HTTPS / TLS Encryption</div>
+                                <div class="settings-desc">Encrypt traffic using local SSL/TLS certificate (restart required)</div>
+                            </div>
+                            <button role="switch" class="toggle" :class="https ? 'toggle-on' : ''"
+                                :aria-checked="https.toString()" x-bind:disabled="httpsBusy"
+                                x-on:click="toggleHttps()"></button>
+                        </div>
+                        <div x-ref="httpsMsg" class="settings-msg"></div>
                     </div>
 
                     <!-- Autostart Toggle -->

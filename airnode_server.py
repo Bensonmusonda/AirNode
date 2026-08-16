@@ -124,9 +124,11 @@ def get_network_interfaces() -> list[dict]:
 
 
 class MdnsAdvertisement(AbstractContextManager):
-    def __init__(self, port: int, enabled: bool = True) -> None:
+    def __init__(self, port: int, enabled: bool = True, https: bool = False) -> None:
         self.port = port
         self.enabled = enabled
+        self.https = https
+        self.scheme = "https" if https else "http"
         self.zeroconf = None
         self.info = None
         self.urls: list[str] = []
@@ -134,7 +136,7 @@ class MdnsAdvertisement(AbstractContextManager):
 
     def __enter__(self):
         lan_addresses = get_lan_ipv4_addresses()
-        self.urls = [f"http://{address}:{self.port}" for address in lan_addresses]
+        self.urls = [f"{self.scheme}://{address}:{self.port}" for address in lan_addresses]
 
         if self.enabled and Zeroconf and ServiceInfo and lan_addresses:
             packed_addresses = [socket.inet_aton(address) for address in lan_addresses]
@@ -146,6 +148,7 @@ class MdnsAdvertisement(AbstractContextManager):
                 properties={
                     "path": "/",
                     "name": "AirNode",
+                    "tls": "1" if self.https else "0",
                 },
                 server=HOSTNAME,
             )
@@ -176,7 +179,7 @@ class MdnsAdvertisement(AbstractContextManager):
     def mdns_url(self) -> str | None:
         if not self.enabled or not self.zeroconf:
             return None
-        return f"http://airnode.local:{self.port}"
+        return f"{self.scheme}://airnode.local:{self.port}"
 
 
 def print_access_urls(advertisement: MdnsAdvertisement) -> None:
@@ -204,7 +207,8 @@ def print_access_urls(advertisement: MdnsAdvertisement) -> None:
         print("LAN fallback URLs: none detected yet.")
 
     if os.environ.get("AIRNODE_QR_URL"):
-        print("QR code page: http://localhost:%s/connect" % advertisement.port)
+        scheme = "https" if os.environ.get("AIRNODE_HTTPS") == "1" else "http"
+        print("QR code page: %s://localhost:%s/connect" % (scheme, advertisement.port))
         print("QR target: %s" % os.environ["AIRNODE_QR_URL"])
     elif os.environ.get("AIRNODE_QR_ERROR"):
         print("QR code: unavailable (%s)." % os.environ["AIRNODE_QR_ERROR"])
@@ -416,19 +420,24 @@ def _probe_airnode(port: int, timeout: float = 1.0) -> bool:
     """Return True if an AirNode instance is already listening on `port`.
 
     Uses the public /api/status endpoint (auth-free) so a second launch
-    can detect the running instance without any credentials. The port may
-    be busy but not AirNode (e.g. a web server) — that case returns False
-    so the caller falls back to the next-free-port logic.
+    can detect the running instance without any credentials.
     """
-    url = f"http://127.0.0.1:{port}/api/status"
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            if resp.status != 200:
-                return False
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
-            return bool(data.get("running")) and bool(data.get("version"))
-    except Exception:
-        return False
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    for scheme in ("http", "https"):
+        url = f"{scheme}://127.0.0.1:{port}/api/status"
+        try:
+            with urllib.request.urlopen(url, timeout=timeout, context=ctx if scheme == "https" else None) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8", errors="replace"))
+                    if bool(data.get("running")) and bool(data.get("version")):
+                        return True
+        except Exception:
+            pass
+    return False
 
 
 def _write_pid_file(port: int) -> None:
@@ -469,43 +478,54 @@ def main() -> None:
         sys.exit(0)
 
     # ── Startup validation (Phase 3.4) ──────────────────────────────
-    # Check writable data dir first — a cryptic traceback on a read-only
-    # install folder is one of the worst first-run experiences.
     _validate_data_dir()
 
     # Load config file and merge with CLI args.
-    # CLI args take precedence when explicitly provided.
     cfg = load_config()
 
-    # Determine effective port/host/mdns:
-    # - If CLI args are at defaults, use config values if present
-    # - Otherwise CLI args win
     port = args.port if args.port != 8000 else cfg.port
     host = args.host if args.host != "0.0.0.0" else cfg.host
     mdns_enabled = not args.no_mdns and cfg.mdns_enabled
+    https_enabled = cfg.https_enabled
+
+    # ── TLS / HTTPS certificate setup ───────────────────────────────
+    ssl_certfile = None
+    ssl_keyfile = None
+    if https_enabled:
+        try:
+            from tls_cert import ensure_server_certificate
+            lan_ips = get_lan_ipv4_addresses()
+            cert_p, key_p = ensure_server_certificate(lan_ips)
+            ssl_certfile = str(cert_p)
+            ssl_keyfile = str(key_p)
+            os.environ["AIRNODE_HTTPS"] = "1"
+            logger.info("HTTPS transport encryption enabled")
+        except Exception as exc:
+            logger.warning("Failed to initialize TLS certificates, falling back to HTTP: %s", exc)
+            https_enabled = False
+            os.environ["AIRNODE_HTTPS"] = "0"
+    else:
+        os.environ["AIRNODE_HTTPS"] = "0"
+
+    scheme = "https" if https_enabled else "http"
 
     # Validate the effective port is a legal value before binding.
     _validate_port(port)
 
-    # Check port availability before starting — give a clear error instead
-    # of letting uvicorn crash with a cryptic traceback.
+    # Check port availability before starting
     if not is_port_available(port, host):
-        # Single-instance behaviour: if the busy port is actually AirNode,
-        # don't spawn a second server — just open the running instance.
         if _probe_airnode(port):
             print(f"AirNode is already running on port {port}.")
-            print(f"Open: http://localhost:{port}")
+            print(f"Open: {scheme}://localhost:{port}")
             if not args.no_browser:
-                webbrowser.open(f"http://localhost:{port}")
+                webbrowser.open(f"{scheme}://localhost:{port}")
             sys.exit(0)
 
-        # Port busy by something else (or unresponsive) — fall back to the
-        # next free port as before.
         alt_port = find_available_port(port, host)
         if alt_port != port:
             print(f"Port {port} is already in use.")
             print(f"AirNode will use port {alt_port} instead.")
-            print(f"Open: http://localhost:{alt_port}")
+            print(f"Open: {scheme}://localhost:{alt_port}")
             port = alt_port
         else:
             print(f"ERROR: Port {port} is already in use and no free port was found.")
@@ -513,33 +533,24 @@ def main() -> None:
             print(f"  AirNode.exe --port <port>")
             sys.exit(1)
 
-    # Store the resolved port so the tray / settings page can read it back
     os.environ.setdefault("AIRNODE_ACTUAL_PORT", str(port))
-
-    # Record the resolved port (and our pid) so a second launch can find
-    # the running instance even if the config has since changed.
     _write_pid_file(port)
 
-    # Start the system tray icon (background thread) unless disabled
+    # Start system tray icon
     tray_thread = None
     if not args.no_tray:
         tray_thread = start_tray_thread()
         if tray_thread:
             logger.info("System tray icon enabled")
 
-    # Auto-open browser unless --no-browser is passed.
-    # On first run, go to /setup; otherwise go to the main page.
+    # Auto-open browser
     if not args.no_browser:
         first_run = not has_auth_config()
         target = "/setup" if first_run else "/"
-        webbrowser.open(f"http://localhost:{port}{target}")
+        webbrowser.open(f"{scheme}://localhost:{port}{target}")
 
     import uvicorn
 
-    # ── Graceful shutdown (Phase 3.1) ───────────────────────────────
-    # Register a SIGTERM handler so `taskkill` / service managers can shut
-    # us down cleanly (Ctrl+C is handled by KeyboardInterrupt in the
-    # try/except/finally below).
     def _handle_sigterm(signum, frame):
         logger.info("Received SIGTERM — shutting down gracefully...")
         raise KeyboardInterrupt
@@ -548,20 +559,21 @@ def main() -> None:
         try:
             signal.signal(signal.SIGTERM, _handle_sigterm)
         except ValueError:
-            # Not in main thread — skip; uvicorn will handle the shutdown.
             pass
 
     try:
-        with MdnsAdvertisement(port=port, enabled=mdns_enabled) as advertisement:
+        with MdnsAdvertisement(port=port, enabled=mdns_enabled, https=https_enabled) as advertisement:
             publish_connection_details(advertisement)
             print_access_urls(advertisement)
 
-            # Disable reload when frozen (PyInstaller) — reload spawns a new
-            # process and doesn't work inside a frozen executable.
             reload = not is_frozen()
-            uvicorn.run("main:app", host=host, port=port, reload=reload)
+            uvicorn_kwargs = {}
+            if ssl_certfile and ssl_keyfile:
+                uvicorn_kwargs["ssl_certfile"] = ssl_certfile
+                uvicorn_kwargs["ssl_keyfile"] = ssl_keyfile
+
+            uvicorn.run("main:app", host=host, port=port, reload=reload, **uvicorn_kwargs)
     except KeyboardInterrupt:
-        # Ctrl+C / SIGTERM — normal graceful shutdown path
         logger.info("Shutdown signal received")
     except Exception:
         logger.exception("AirNode terminated unexpectedly")

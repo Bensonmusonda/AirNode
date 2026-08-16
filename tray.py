@@ -68,7 +68,9 @@ def run_tray(on_restart=None, on_exit=None):
         return None
 
     def base_url() -> str:
-        return f"http://localhost:{load_config().port}"
+        cfg = load_config()
+        scheme = "https" if cfg.https_enabled else "http"
+        return f"{scheme}://localhost:{cfg.port}"
 
     def open_settings(icon, menu_item=None):
         webbrowser.open(f"{base_url()}/settings")
