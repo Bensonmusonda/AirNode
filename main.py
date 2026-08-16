@@ -147,7 +147,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 # /api/status is public so a second AirNode launch can detect an already-
 # running instance without credentials. It only reveals version + pid.
-PUBLIC_PATHS = {"/login", "/setup", "/favicon.ico", "/api/status"}
+PUBLIC_PATHS = {"/login", "/setup", "/reset-pin", "/favicon.ico", "/api/status"}
 PUBLIC_PREFIXES = ("/static/",)
 
 
@@ -619,11 +619,75 @@ def connect(request: Request):
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
     """Renders the system settings page."""
+    from autostart import is_autostart_enabled
     cfg = load_config()
     return _render(request, "settings.html", {
         "config": cfg,
+        "actual_autostart": is_autostart_enabled(),
         "version": VERSION,
     })
+
+
+# ==============================================================================
+# PIN Reset (localhost-only)
+# ==============================================================================
+
+def _is_localhost(request: Request) -> bool:
+    """Returns True if the request originates from the host machine."""
+    host = (request.client.host if request.client else "") or ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+@app.get("/reset-pin", response_class=HTMLResponse)
+def reset_pin_page(request: Request):
+    """Localhost-only PIN reset page."""
+    if not _is_localhost(request):
+        return RedirectResponse(
+            url="/login?error=PIN+reset+is+only+available+from+the+host+computer",
+            status_code=303,
+        )
+    return _render(request, "reset_pin.html", {"error": None, "version": VERSION})
+
+
+@app.post("/reset-pin", response_class=HTMLResponse)
+async def reset_pin_submit(request: Request):
+    """Localhost-only PIN reset handler."""
+    if not _is_localhost(request):
+        return RedirectResponse(
+            url="/login?error=PIN+reset+is+only+available+from+the+host+computer",
+            status_code=303,
+        )
+    form = await request.form()
+    pin = (form.get("pin") or "").strip()
+    pin_confirm = (form.get("pin_confirm") or "").strip()
+
+    def _err(msg: str):
+        return _render(request, "reset_pin.html", {"error": msg, "version": VERSION})
+
+    if not pin.isdigit():
+        return _err("PIN must contain digits only.")
+    if len(pin) < 6 or len(pin) > 10:
+        return _err("PIN must be between 6 and 10 digits.")
+    if pin != pin_confirm:
+        return _err("PINs do not match. Please try again.")
+
+    create_pin(pin)
+
+    # Issue a fresh session so the user lands straight on the dashboard.
+    session_token = create_session_token()
+    csrf_token = create_csrf_token()
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        COOKIE_NAME, session_token,
+        httponly=True, samesite="lax",
+        max_age=SESSION_MAX_AGE_SECONDS,
+    )
+    response.set_cookie(
+        CSRF_COOKIE_NAME, csrf_token,
+        httponly=False, samesite="lax",
+        max_age=SESSION_MAX_AGE_SECONDS,
+    )
+    return response
 
 
 @app.post("/settings/port")

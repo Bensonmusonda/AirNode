@@ -118,7 +118,7 @@
             Alpine.data('settings', () => ({
                 port: {{ config.port }},
                 mdns: {{ 'true' if config.mdns_enabled else 'false' }},
-                autostart: {{ 'true' if config.autostart else 'false' }},
+                autostart: {{ 'true' if actual_autostart else 'false' }},
                 mdnsBusy: false,
                 autostartBusy: false,
                 restarting: false,

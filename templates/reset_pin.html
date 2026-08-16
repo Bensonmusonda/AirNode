@@ -1,0 +1,100 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reset PIN - AirNode</title>
+    <meta name="description" content="Reset your AirNode access PIN from the host computer." />
+    <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+
+<body class="auth-body">
+    <main class="auth-page">
+        <section class="auth-panel">
+            <div class="auth-header">
+                <span class="auth-wordmark">AirNode</span>
+                <h1>Reset PIN</h1>
+            </div>
+
+            <p style="font-size: 13px; color: var(--text-2); text-align: center; margin: 0 0 18px; line-height: 1.5;">
+                You are resetting your PIN from the host computer. Choose a new PIN
+                that other devices will use to access AirNode.
+            </p>
+
+            <div style="display: flex; align-items: center; gap: 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 10px; padding: 10px 14px; margin-bottom: 20px;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4m0-4h.01"/></svg>
+                <span style="font-size: 12px; color: var(--accent);">This page is only accessible on the host computer.</span>
+            </div>
+
+            <form class="auth-form" method="post" action="/reset-pin" autocomplete="off">
+                <label class="auth-label" for="pin">New PIN</label>
+                <input
+                    id="pin"
+                    class="auth-input"
+                    name="pin"
+                    type="password"
+                    inputmode="numeric"
+                    pattern="[0-9]*"
+                    minlength="6"
+                    maxlength="10"
+                    autofocus
+                    required
+                />
+
+                <label class="auth-label" for="pin_confirm" style="margin-top: 12px;">Confirm PIN</label>
+                <input
+                    id="pin_confirm"
+                    class="auth-input"
+                    name="pin_confirm"
+                    type="password"
+                    inputmode="numeric"
+                    pattern="[0-9]*"
+                    minlength="6"
+                    maxlength="10"
+                    required
+                />
+
+                {% if error %}
+                <p class="auth-error">{{ error }}</p>
+                {% endif %}
+
+                <button class="auth-submit" type="submit">Set New PIN</button>
+            </form>
+
+            <p style="font-size: 12px; color: var(--text-2); text-align: center; margin-top: 14px; line-height: 1.5;">
+                Use 6-10 digits. After resetting, all other sessions will
+                need to log in again with the new PIN.
+            </p>
+
+            <p style="font-size: 12px; color: var(--text-2); text-align: center; margin-top: 8px;">
+                <a href="/login" style="color: var(--accent); text-decoration: none; font-weight: 500;">Back to login</a>
+            </p>
+
+        <p style="font-size: 11px; color: var(--text-2); text-align: center; margin-top: 18px; opacity: 0.7;">AirNode v{{ version }}</p></section>
+    </main>
+
+    <script>
+        (function () {
+            const form = document.querySelector('.auth-form');
+            const pin = document.getElementById('pin');
+            const confirm = document.getElementById('pin_confirm');
+
+            form.addEventListener('submit', function (e) {
+                if (pin.value !== confirm.value) {
+                    e.preventDefault();
+                    const existing = document.querySelector('.auth-error');
+                    if (existing) existing.remove();
+                    const p = document.createElement('p');
+                    p.className = 'auth-error';
+                    p.textContent = 'PINs do not match. Please try again.';
+                    form.insertBefore(p, form.querySelector('.auth-submit'));
+                    confirm.focus();
+                    confirm.select();
+                }
+            });
+        })();
+    </script>
+</body>
+
+</html>
