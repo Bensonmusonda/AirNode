@@ -836,13 +836,27 @@ def settings_https_toggle():
 
 
 @app.post("/settings/ca/install")
-def settings_ca_install():
-    """Attempt to register the Local Root CA into the Windows Certificate store."""
+async def settings_ca_install(request: Request):
+    """Attempt to register the Local Root CA into the Windows Certificate store.
+
+    Accepts optional JSON body: { "force": true } to reinstall even when already present.
+    This is necessary when the CA was regenerated and the browser has cached the old cert.
+    """
     from tls_cert import ensure_root_ca, install_ca_to_windows_store, is_ca_installed_in_windows_store
+    try:
+        body = await request.json()
+        force = bool(body.get("force", False))
+    except Exception:
+        force = False
     ca_cert, _ = ensure_root_ca()
-    success = install_ca_to_windows_store(ca_cert)
+    success = install_ca_to_windows_store(ca_cert, force=force)
     installed = is_ca_installed_in_windows_store()
-    return JSONResponse({"ok": success or installed, "installed": installed})
+    return JSONResponse({
+        "ok": success or installed,
+        "installed": installed,
+        # Inform the UI that Chrome/Edge caches the cert store and needs a restart
+        "browser_restart_required": installed,
+    })
 
 
 # ==============================================================================

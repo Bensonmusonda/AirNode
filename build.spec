@@ -27,6 +27,7 @@ hiddenimports = (
     collect_submodules("uvicorn")
     + collect_submodules("zeroconf")
     + collect_submodules("mutagen")
+    + collect_submodules("cryptography")
     + [
         # FastAPI / Starlette dynamic deps
         "multipart",
@@ -51,7 +52,9 @@ hiddenimports = (
         "db",
         "logging_config",
         "media_meta",
+        "network_trust",
         "paths",
+        "tls_cert",
         "tray",
         "updater",
         "license_manager",

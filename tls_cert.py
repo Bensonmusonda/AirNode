@@ -4,7 +4,8 @@ Generates:
 1. AirNode Local Root CA (4096-bit RSA, 10-year validity)
 2. AirNode Server Certificate (2048-bit RSA, signed by Root CA, SANs covering
    localhost, airnode.local, and all local network IPv4 addresses)
-3. Windows Certificate Store auto-registration (certutil -addstore)
+3. Windows Certificate Store auto-registration via PowerShell Import-Certificate
+   (non-interactive, no dialog, no elevation needed for CurrentUser store)
 4. Apple .mobileconfig profile generator for 1-tap iOS certificate enrollment
 """
 
@@ -131,60 +132,157 @@ def ensure_root_ca() -> tuple[Path, Path]:
 
     _save_cert(ca_cert, ca_cert_path)
     logger.info("AirNode Local Root CA generated successfully at %s", ca_cert_path)
-
-    # Automatically install on Windows host if applicable
-    install_ca_to_windows_store(ca_cert_path)
+    # NOTE: We do NOT auto-install here. Certificate installation is a user-facing
+    # action triggered from Settings → "Install Certificate". Silently attempting
+    # it at startup with CREATE_NO_WINDOW was suppressing the dialog on most configs.
 
     return ca_cert_path, ca_key_path
 
 
+def _get_ca_thumbprint(ca_cert_path: Path) -> str:
+    """Return the SHA-1 thumbprint (hex, uppercase, no separators) of the CA cert on disk."""
+    cert = _load_cert(ca_cert_path)
+    return cert.fingerprint(hashes.SHA1()).hex().upper()
+
+
 def is_ca_installed_in_windows_store() -> bool:
-    """Check if the Root CA is installed in the current user's Root store."""
+    """Check if the Root CA is installed in the current user's Root store AND matches the on-disk cert.
+
+    Matching on thumbprint prevents false-positives when the CA was regenerated but
+    an old version is still sitting in the store.
+    """
     if sys.platform != "win32":
         return False
     try:
+        # Check if the name exists at all first
         check = subprocess.run(
             ["certutil", "-user", "-verifystore", "Root", CA_NAME],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=5,
             creationflags=0x08000000,
         )
-        return check.returncode == 0 and CA_NAME in check.stdout
+        if check.returncode != 0 or CA_NAME not in check.stdout:
+            return False
+
+        # Verify the on-disk CA thumbprint matches what's in the store
+        certs_dir = get_certs_dir()
+        ca_cert_path = certs_dir / "ca.crt"
+        if not ca_cert_path.exists():
+            return False
+        disk_thumb = _get_ca_thumbprint(ca_cert_path)
+        # certutil output contains the hash like: Cert Hash(sha1): 0c2a3635...
+        store_thumb = ""
+        for line in check.stdout.splitlines():
+            if "Cert Hash(sha1)" in line:
+                store_thumb = line.split(":", 1)[1].strip().replace(" ", "").upper()
+                break
+        if store_thumb and disk_thumb != store_thumb:
+            logger.info(
+                "CA thumbprint mismatch: store=%s disk=%s — treating as not installed.",
+                store_thumb,
+                disk_thumb,
+            )
+            return False
+        return True
     except Exception:
         return False
 
 
-def install_ca_to_windows_store(ca_cert_path: Path) -> bool:
-    """Register the Root CA into the current user's Trusted Root Certification Authorities store."""
+def install_ca_to_windows_store(ca_cert_path: Path, force: bool = False) -> bool:
+    """Register the Root CA into the current user's Trusted Root Certification Authorities store.
+
+    Uses PowerShell's ``Import-Certificate`` cmdlet which is silent, non-interactive,
+    and does not require elevation for the CurrentUser store — unlike ``certutil -addstore``
+    which can silently fail when the parent process has no window (CREATE_NO_WINDOW).
+
+    Args:
+        ca_cert_path: Path to the CA certificate file (PEM or DER).
+        force: If True, re-import even when already installed (e.g. after CA regeneration).
+    """
     if sys.platform != "win32":
         return False
 
-    if is_ca_installed_in_windows_store():
+    if not force and is_ca_installed_in_windows_store():
         logger.info("Root CA is already installed in Windows CurrentUser Root store.")
         return True
 
+    # Use .NET X509Store API directly via PowerShell — this is fully programmatic,
+    # never triggers a UI dialog, and doesn't need elevation for CurrentUser\Root.
     try:
-        # certutil -addstore -user Root triggers a standard Windows confirmation dialog on first run.
-        # Use a short timeout so background/headless runs don't hang if user doesn't interact immediately.
+        cert = _load_cert(ca_cert_path)
+        der_bytes = cert.public_bytes(serialization.Encoding.DER)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".cer", delete=False) as tmp:
+            tmp.write(der_bytes)
+            tmp_path = tmp.name
+    except Exception as exc:
+        logger.warning("Failed to prepare CA cert for import: %s", exc)
+        return False
+
+    try:
+        # PowerShell using .NET X509Store directly — no UI, no dialog, no elevation.
+        # Note: CurrentUser\Root on Windows 10/11 does NOT require admin rights.
+        ps_cmd = (
+            "$store = New-Object System.Security.Cryptography.X509Certificates.X509Store("
+            "'Root','CurrentUser'); "
+            "$store.Open('ReadWrite'); "
+            f"$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('{tmp_path}'); "
+            "$store.Add($cert); "
+            "$store.Close(); "
+            "Write-Output 'OK'"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW: .NET API needs no window
+        )
+        if result.returncode == 0 and "OK" in result.stdout:
+            logger.info("Successfully installed AirNode Root CA via .NET X509Store.")
+            return True
+        else:
+            logger.warning(
+                ".NET X509Store install failed (rc=%s): %s",
+                result.returncode,
+                result.stderr.strip() or result.stdout.strip(),
+            )
+            return _install_ca_certutil_fallback(ca_cert_path)
+    except subprocess.TimeoutExpired:
+        logger.warning("PowerShell X509Store timed out — trying certutil fallback.")
+        return _install_ca_certutil_fallback(ca_cert_path)
+    except Exception as exc:
+        logger.warning("PowerShell X509Store raised: %s — trying certutil fallback.", exc)
+        return _install_ca_certutil_fallback(ca_cert_path)
+    finally:
+        try:
+            import os as _os
+            _os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+def _install_ca_certutil_fallback(ca_cert_path: Path) -> bool:
+    """Fallback: install via certutil -addstore without CREATE_NO_WINDOW."""
+    try:
         add_res = subprocess.run(
             ["certutil", "-user", "-addstore", "Root", str(ca_cert_path)],
             capture_output=True,
             text=True,
-            timeout=4,
-            creationflags=0x08000000,
+            timeout=30,
+            # Intentionally no CREATE_NO_WINDOW so the confirmation dialog can appear.
         )
         if add_res.returncode == 0:
-            logger.info("Successfully added AirNode Local Root CA to Windows CurrentUser Root store.")
+            logger.info("Root CA installed via certutil fallback.")
             return True
-        else:
-            logger.warning("certutil -addstore returned code %s", add_res.returncode)
-            return False
+        logger.warning("certutil -addstore returned code %s: %s", add_res.returncode, add_res.stderr)
+        return False
     except subprocess.TimeoutExpired:
-        logger.info("certutil -addstore prompt timed out or waiting in background.")
+        logger.warning("certutil -addstore timed out.")
         return False
     except Exception as exc:
-        logger.warning("Failed to install Root CA into Windows store: %s", exc)
+        logger.warning("certutil fallback failed: %s", exc)
         return False
 
 

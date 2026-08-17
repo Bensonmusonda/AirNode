@@ -423,23 +423,24 @@
                     }
                 },
 
-                async installCaCert() {
+                async installCaCert(force = false) {
                     if (this.caBusy) return;
                     this.caBusy = true;
                     const msg = this.$refs.httpsMsg;
                     try {
                         const res = await fetch('/settings/ca/install', {
                             method: 'POST',
-                            headers: { 'X-CSRF-Token': getCsrfToken() }
+                            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
+                            body: JSON.stringify({ force })
                         });
                         const data = await res.json();
                         if (data.installed) {
                             this.caInstalled = true;
                             msg.className = 'settings-msg show ok';
-                            msg.textContent = 'Root CA registered in Windows Certificate Store.';
+                            msg.textContent = 'Root CA installed ✓  —  Restart Chrome/Edge for it to take effect.';
                         } else {
                             msg.className = 'settings-msg show err';
-                            msg.textContent = 'Certificate installation was cancelled or failed.';
+                            msg.textContent = 'Certificate installation failed. Try the Force Reinstall button or install ca.crt manually.';
                         }
                     } catch (e) {
                         msg.className = 'settings-msg show err';
@@ -591,6 +592,48 @@
                                 :aria-checked="https.toString()" x-bind:disabled="httpsBusy"
                                 x-on:click="toggleHttps()"></button>
                         </div>
+
+                        <!-- CA certificate install section (only shown when HTTPS is on) -->
+                        <template x-if="https">
+                            <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+                                <div class="settings-row" style="align-items:flex-start; gap:12px;">
+                                    <div style="flex:1; min-width:0;">
+                                        <div class="settings-title" style="margin-bottom:4px;">
+                                            <span x-show="caInstalled" style="color:#16a34a;">✓ CA Certificate Trusted</span>
+                                            <span x-show="!caInstalled">CA Certificate — Not Trusted</span>
+                                        </div>
+                                        <div class="settings-desc" x-show="!caInstalled">
+                                            Install the AirNode Root CA so browsers stop showing "Not Secure".
+                                        </div>
+                                        <div class="settings-desc" x-show="caInstalled" style="color:#d97706;">
+                                            ⚠ Restart your browser (Chrome/Edge) after installing for the padlock to appear.
+                                        </div>
+                                        <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
+                                            <a href="/ca.crt" download="airnode-ca.crt"
+                                                style="font-size:11px; color:var(--accent,#3b82f6); text-decoration:none;">
+                                                ↓ Download ca.crt (Windows/Android/Firefox)
+                                            </a>
+                                            <span style="color:var(--border);">&bull;</span>
+                                            <a href="/airnode-ca.mobileconfig" download="airnode-ca.mobileconfig"
+                                                style="font-size:11px; color:var(--accent,#3b82f6); text-decoration:none;">
+                                                ↓ Download .mobileconfig (iOS/macOS)
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">
+                                        <button class="btn-primary" x-bind:disabled="caBusy"
+                                            x-on:click="installCaCert(false)"
+                                            x-text="caBusy ? 'Installing…' : (caInstalled ? 'Reinstall' : 'Install')"
+                                            style="white-space:nowrap;"></button>
+                                        <button x-show="caInstalled"
+                                            style="font-size:11px; padding:4px 10px; background:transparent; border:1px solid var(--border); border-radius:var(--radius); color:var(--text-2); cursor:pointer; white-space:nowrap;"
+                                            x-bind:disabled="caBusy"
+                                            x-on:click="installCaCert(true)">Force Reinstall</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
                         <div x-ref="httpsMsg" class="settings-msg"></div>
                     </div>
 
